@@ -2,25 +2,43 @@
 mod imp {
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Instant;
 
     use tauri::State;
 
     use crate::database::repositories::RecordingsRepository;
+    use crate::screen_recorder::bookmark::{drop_bookmark, BookmarkError, BookmarkSource};
     use crate::screen_recorder::types::{DisplayInfo, RecordingMeta, ScreenRecorderError};
     use crate::screen_recorder::ScreenRecorder;
     use crate::state::AppState;
 
+    /// Information about the currently-active recording, used by the
+    /// bookmark + status flows. Held inside `ScreenRecorderState` and
+    /// populated/cleared on start/stop.
+    #[derive(Debug, Clone)]
+    pub struct ActiveRecordingInfo {
+        pub recording_id: String,
+        pub meeting_id: String,
+        pub started_at: Instant,
+    }
+
     pub struct ScreenRecorderState {
         pub recorder: Arc<ScreenRecorder>,
-        pub current_recording_id: tokio::sync::Mutex<Option<String>>,
+        pub active: tokio::sync::Mutex<Option<ActiveRecordingInfo>>,
     }
 
     impl ScreenRecorderState {
         pub fn new() -> Self {
             Self {
                 recorder: Arc::new(ScreenRecorder::new()),
-                current_recording_id: tokio::sync::Mutex::new(None),
+                active: tokio::sync::Mutex::new(None),
             }
+        }
+
+        /// Snapshot of the active recording, if any. Used by the local HTTP
+        /// API status endpoint and the bookmark flow.
+        pub async fn snapshot(&self) -> Option<ActiveRecordingInfo> {
+            self.active.lock().await.clone()
         }
     }
 
@@ -74,8 +92,12 @@ mod imp {
             .recorder
             .start(display_id, &path, fps.unwrap_or(30), bitrate_kbps.unwrap_or(3000))?;
 
-        let mut cur = state.current_recording_id.lock().await;
-        *cur = Some(row.id.clone());
+        let mut cur = state.active.lock().await;
+        *cur = Some(ActiveRecordingInfo {
+            recording_id: row.id.clone(),
+            meeting_id: meeting_id.clone(),
+            started_at: Instant::now(),
+        });
         Ok(row.id)
     }
 
@@ -86,12 +108,12 @@ mod imp {
     ) -> Result<RecordingMeta, ScreenRecorderError> {
         let meta = state.recorder.stop()?;
 
-        let mut cur = state.current_recording_id.lock().await;
-        if let Some(id) = cur.take() {
+        let mut cur = state.active.lock().await;
+        if let Some(info) = cur.take() {
             let pool = app_state.db_manager.pool();
             let _ = RecordingsRepository::finalize(
                 pool,
-                &id,
+                &info.recording_id,
                 chrono::Utc::now().timestamp_millis(),
                 Some(meta.width as i64),
                 Some(meta.height as i64),
@@ -102,12 +124,61 @@ mod imp {
         }
         Ok(meta)
     }
+
+    /// Drops a bookmark at the current recording's elapsed offset.
+    ///
+    /// `source` must be one of "hotkey" / "api" / "ui". Returns the new
+    /// bookmark's id and timestamp_ms (relative to the recording start).
+    #[tauri::command]
+    pub async fn bookmark_now(
+        label: Option<String>,
+        source: String,
+        state: State<'_, ScreenRecorderState>,
+        app_state: State<'_, AppState>,
+    ) -> Result<BookmarkResult, BookmarkError> {
+        let parsed_source = match source.as_str() {
+            "hotkey" => BookmarkSource::Hotkey,
+            "api" => BookmarkSource::Api,
+            "ui" => BookmarkSource::Ui,
+            other => {
+                return Err(BookmarkError::Db(format!("invalid source: {}", other)));
+            }
+        };
+
+        let info = state
+            .snapshot()
+            .await
+            .ok_or(BookmarkError::NotRecording)?;
+
+        let pool = app_state.db_manager.pool();
+        let dropped = drop_bookmark(
+            pool,
+            &info.meeting_id,
+            info.started_at,
+            label.as_deref(),
+            parsed_source,
+        )
+        .await?;
+        Ok(BookmarkResult {
+            id: dropped.id,
+            meeting_id: dropped.meeting_id,
+            timestamp_ms: dropped.timestamp_ms,
+        })
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct BookmarkResult {
+        pub id: String,
+        pub meeting_id: String,
+        pub timestamp_ms: i64,
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod imp {
     use tauri::State;
 
+    use crate::screen_recorder::bookmark::BookmarkError;
     use crate::screen_recorder::types::{DisplayInfo, RecordingMeta, ScreenRecorderError};
     use crate::state::AppState;
 
@@ -116,6 +187,16 @@ mod imp {
         pub fn new() -> Self {
             Self
         }
+        pub async fn snapshot(&self) -> Option<()> {
+            None
+        }
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct BookmarkResult {
+        pub id: String,
+        pub meeting_id: String,
+        pub timestamp_ms: i64,
     }
 
     #[tauri::command]
@@ -149,6 +230,15 @@ mod imp {
         Err(ScreenRecorderError::Internal(
             "not supported on this platform".into(),
         ))
+    }
+    #[tauri::command]
+    pub async fn bookmark_now(
+        _label: Option<String>,
+        _source: String,
+        _s: State<'_, ScreenRecorderState>,
+        _a: State<'_, AppState>,
+    ) -> Result<BookmarkResult, BookmarkError> {
+        Err(BookmarkError::NotRecording)
     }
 }
 

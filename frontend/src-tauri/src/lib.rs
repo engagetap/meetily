@@ -48,6 +48,7 @@ pub mod openai;
 pub mod anthropic;
 pub mod groq;
 pub mod openrouter;
+pub mod local_api;
 pub mod parakeet_engine;
 pub mod screen_recorder;
 pub mod state;
@@ -384,6 +385,68 @@ async fn set_language_preference(language: String) -> Result<(), String> {
 }
 
 // Internal helper function to get language preference (for use within Rust code)
+/// Phase 1B initialization: starts the axum control server (binding to a
+/// random local port, persisting that port to `api.json`), and registers a
+/// global hotkey that drops a bookmark on the active recording.
+///
+/// Failures are logged but do not abort app startup.
+fn init_local_api_and_hotkey(app: &mut tauri::App) {
+    use crate::screen_recorder::bookmark::{drop_bookmark, BookmarkSource};
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+    let app_handle = app.handle().clone();
+
+    tauri::async_runtime::spawn(async move {
+        // Start the axum server. It will look up DB / recorder / config state on each
+        // request, so we don't need to wait for AppState to be ready before binding.
+        let port = match local_api::start_server(app_handle.clone()).await {
+            Ok(p) => p,
+            Err(e) => {
+                log_error!("local_api: failed to bind: {}", e);
+                return;
+            }
+        };
+
+        // Persist the actual bound port to api.json.
+        let cfg_state = app_handle.state::<local_api::ApiConfigState>();
+        cfg_state.update_port(port).await;
+
+        log_info!("local_api: listening on http://127.0.0.1:{}", port);
+
+        // Register the global bookmark hotkey: ⇧⌘B.
+        let shortcut = Shortcut::new(Some(Modifiers::SHIFT | Modifiers::SUPER), Code::KeyB);
+        let app_for_hotkey = app_handle.clone();
+        let on_press = move |_app: &AppHandle, _sc: &Shortcut, event: tauri_plugin_global_shortcut::ShortcutEvent| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            let app_clone = app_for_hotkey.clone();
+            tauri::async_runtime::spawn(async move {
+                let recorder_state = app_clone.state::<screen_recorder::commands::ScreenRecorderState>();
+                let app_state = app_clone.state::<state::AppState>();
+                let info = match recorder_state.snapshot().await {
+                    Some(i) => i,
+                    None => {
+                        log_info!("hotkey: bookmark ignored (not recording)");
+                        return;
+                    }
+                };
+                let pool = app_state.db_manager.pool();
+                match drop_bookmark(pool, &info.meeting_id, info.started_at, None, BookmarkSource::Hotkey).await {
+                    Ok(b) => log_info!("hotkey: dropped bookmark {} @ {} ms", b.id, b.timestamp_ms),
+                    Err(e) => log_error!("hotkey: bookmark failed: {}", e),
+                }
+            });
+        };
+
+        if let Err(e) = app_handle.global_shortcut().on_shortcut(shortcut, on_press) {
+            log_error!("hotkey: failed to register ⇧⌘B: {}", e);
+        } else {
+            log_info!("hotkey: ⇧⌘B registered for bookmark drop");
+        }
+    });
+}
+
 pub fn get_language_preference_internal() -> Option<String> {
     LANGUAGE_PREFERENCE.lock().ok().map(|lang| lang.clone())
 }
@@ -397,6 +460,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage({
+            // Local HTTP API config — load existing api.json or generate a fresh token + persist.
+            let cfg = local_api::config::config_path()
+                .and_then(|p| std::fs::read_to_string(&p).ok())
+                .and_then(|s| serde_json::from_str::<local_api::ApiConfig>(&s).ok())
+                .unwrap_or_else(|| {
+                    local_api::ApiConfig::new("127.0.0.1", 0, local_api::config::generate_token())
+                });
+            local_api::ApiConfigState::new(cfg)
+        })
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
@@ -411,6 +485,9 @@ pub fn run() {
             if let Err(e) = tray::create_tray(_app.handle()) {
                 log::error!("Failed to create system tray: {}", e);
             }
+
+            // --- Phase 1B: local HTTP API + global bookmark hotkey ---
+            init_local_api_and_hotkey(_app);
 
             // Initialize notification system with proper defaults
             log::info!("Initializing notification system...");
@@ -655,6 +732,9 @@ pub fn run() {
             screen_recorder::commands::screen_is_recording,
             screen_recorder::commands::screen_start_recording,
             screen_recorder::commands::screen_stop_recording,
+            screen_recorder::commands::bookmark_now,
+            local_api::commands::local_api_get_config,
+            local_api::commands::local_api_regenerate_token,
             openrouter::get_openrouter_models,
             audio::recording_preferences::get_recording_preferences,
             audio::recording_preferences::set_recording_preferences,
