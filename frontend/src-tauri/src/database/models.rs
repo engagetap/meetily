@@ -128,3 +128,47 @@ pub struct TranscriptSetting {
     #[serde(rename = "openaiApiKey")]
     pub openai_api_key: Option<String>,
 }
+
+// Video recording, bookmarks, and screenshots (Phase 1A)
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MeetingRecording {
+    pub id: String,
+    pub meeting_id: String,
+    pub file_path: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub fps: Option<i64>,
+    pub codec: Option<String>,
+    pub display_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MeetingBookmark {
+    pub id: String,
+    pub meeting_id: String,
+    pub timestamp_ms: i64,
+    pub label: Option<String>,
+    pub source: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MeetingScreenshot {
+    pub id: String,
+    pub meeting_id: String,
+    pub timestamp_ms: i64,
+    pub crop_x: Option<i64>,
+    pub crop_y: Option<i64>,
+    pub crop_w: Option<i64>,
+    pub crop_h: Option<i64>,
+    pub image_path: Option<String>,
+    pub caption: Option<String>,
+    pub source: String,
+    pub confidence: Option<f64>,
+    pub accepted: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
