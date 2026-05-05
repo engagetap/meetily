@@ -49,6 +49,7 @@ pub mod anthropic;
 pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
+pub mod screen_recorder;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -401,6 +402,7 @@ pub fn run() {
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
         )) as NotificationManagerState<tauri::Wry>)
         .manage(audio::init_system_audio_state())
+        .manage(screen_recorder::commands::ScreenRecorderState::new())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             log::info!("Application setup complete");
@@ -648,6 +650,11 @@ pub fn run() {
             summary::summary_engine::commands::builtin_ai_is_model_ready,
             summary::summary_engine::commands::builtin_ai_get_available_summary_model,
             summary::summary_engine::commands::builtin_ai_get_recommended_model,
+            // Screen recorder commands (Phase 1A)
+            screen_recorder::commands::screen_list_displays,
+            screen_recorder::commands::screen_is_recording,
+            screen_recorder::commands::screen_start_recording,
+            screen_recorder::commands::screen_stop_recording,
             openrouter::get_openrouter_models,
             audio::recording_preferences::get_recording_preferences,
             audio::recording_preferences::set_recording_preferences,
