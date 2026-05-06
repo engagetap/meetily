@@ -68,10 +68,37 @@ export async function maybeStartScreenRecording(): Promise<void> {
   } catch (err) {
     console.warn('Screen recording skipped:', err);
     toast.error('Screen recording failed', {
-      description: String(err),
-      duration: 6000,
+      description: formatTauriError(err),
+      duration: 8000,
+      action: {
+        label: 'Open Settings',
+        onClick: () => void openScreenRecordingSettings(),
+      },
     });
   }
+}
+
+/**
+ * Tauri command errors come back as objects shaped like
+ * `{ type: 'PermissionDenied' }` or `{ type: 'Internal', message: '...' }`,
+ * which `String()` flattens into `[object Object]`. This formats them
+ * into something readable.
+ */
+function formatTauriError(err: unknown): string {
+  if (err == null) return 'Unknown error';
+  if (typeof err === 'string') return err;
+  if (typeof err === 'object') {
+    const e = err as { type?: string; message?: string };
+    if (e.message && e.type) return `${e.type}: ${e.message}`;
+    if (e.message) return e.message;
+    if (e.type) return e.type;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return 'Unknown error object';
+    }
+  }
+  return String(err);
 }
 
 /**

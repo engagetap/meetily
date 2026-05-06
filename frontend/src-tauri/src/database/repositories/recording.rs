@@ -130,6 +130,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(include_str!(
+            "../../../migrations/20260506000000_drop_screen_recording_fks.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO meetings (id, title, created_at, updated_at) VALUES ('m1','t','t','t')")
             .execute(&pool)
             .await
