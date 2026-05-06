@@ -732,6 +732,7 @@ pub fn run() {
             screen_recorder::commands::screen_list_displays,
             screen_recorder::commands::screen_has_permission,
             screen_recorder::commands::screen_open_permission_settings,
+            screen_recorder::commands::screen_capture_thumbnail,
             screen_recorder::commands::screen_is_recording,
             screen_recorder::commands::screen_start_recording,
             screen_recorder::commands::screen_stop_recording,

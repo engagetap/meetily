@@ -39,9 +39,32 @@ const KEY_ALWAYS_ASK = "meetily.alwaysAskDisplay";
 export function DisplayPickerOverlay() {
   const [open, setOpen] = useState(false);
   const [displays, setDisplays] = useState<Display[]>([]);
+  const [thumbs, setThumbs] = useState<Record<number, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [alwaysAsk, setAlwaysAsk] = useState(true);
   const resolverRef = useRef<Resolver | null>(null);
+
+  /**
+   * Fetches a thumbnail for each display in parallel. Failures are
+   * silently dropped — the card falls back to the generic monitor icon.
+   */
+  async function loadThumbnails(list: Display[]) {
+    const entries = await Promise.all(
+      list.map(async (d): Promise<[number, string] | null> => {
+        try {
+          const url = await invoke<string>("screen_capture_thumbnail", {
+            displayId: d.id,
+            maxWidth: 480,
+          });
+          return [d.id, url];
+        } catch (e) {
+          console.warn(`Thumbnail for display ${d.id} failed:`, e);
+          return null;
+        }
+      })
+    );
+    setThumbs(Object.fromEntries(entries.filter(Boolean) as [number, string][]));
+  }
 
   const pick = useCallback(async (): Promise<number | null> => {
     // If user opted out and a default is set, skip the picker silently.
@@ -58,9 +81,11 @@ export function DisplayPickerOverlay() {
     if (list.length === 1) return list[0].id; // No choice to make.
 
     setDisplays(list);
+    setThumbs({});
     setOpen(true);
     setError(null);
     setAlwaysAsk(localStorage.getItem(KEY_ALWAYS_ASK) !== "false");
+    void loadThumbnails(list);
     return new Promise((resolve) => {
       resolverRef.current = resolve;
     });
@@ -75,6 +100,16 @@ export function DisplayPickerOverlay() {
       }
     };
   }, [pick]);
+
+  // Re-snap thumbnails every 2s while the picker is open so the previews
+  // actually look live. Stops when the picker closes — no background load.
+  useEffect(() => {
+    if (!open || displays.length === 0) return;
+    const id = window.setInterval(() => {
+      void loadThumbnails(displays);
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [open, displays]);
 
   function choose(id: number) {
     resolverRef.current?.(id);
@@ -95,6 +130,7 @@ export function DisplayPickerOverlay() {
 
   async function refresh() {
     setError(null);
+    setThumbs({});
     try {
       const list = await invoke<Display[]>("screen_list_displays");
       setDisplays(list);
@@ -102,6 +138,8 @@ export function DisplayPickerOverlay() {
         setError(
           "No displays returned. Check Screen Recording permission in System Settings."
         );
+      } else {
+        void loadThumbnails(list);
       }
     } catch (e) {
       setError(String(e));
@@ -155,12 +193,23 @@ export function DisplayPickerOverlay() {
                   onClick={() => choose(d.id)}
                   className="text-left border border-gray-200 hover:border-blue-400 hover:shadow-md rounded-lg overflow-hidden transition-all bg-white"
                 >
-                  <div
-                    className="bg-gradient-to-br from-gray-700 to-gray-900 grid place-items-center text-gray-300"
-                    style={{ aspectRatio: `${aspect}`, minHeight: 120 }}
-                  >
-                    <Monitor className="w-12 h-12 opacity-60" />
-                  </div>
+                  {thumbs[d.id] ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={thumbs[d.id]}
+                      alt={`${d.name} preview`}
+                      className="block w-full bg-black"
+                      style={{ aspectRatio: `${aspect}`, objectFit: "contain" }}
+                      draggable={false}
+                    />
+                  ) : (
+                    <div
+                      className="bg-gradient-to-br from-gray-700 to-gray-900 grid place-items-center text-gray-300"
+                      style={{ aspectRatio: `${aspect}`, minHeight: 120 }}
+                    >
+                      <Monitor className="w-12 h-12 opacity-40" />
+                    </div>
+                  )}
                   <div className="p-3 flex items-center justify-between">
                     <div>
                       <div className="font-medium text-sm text-gray-900 flex items-center gap-1.5">

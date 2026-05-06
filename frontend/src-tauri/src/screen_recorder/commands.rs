@@ -64,6 +64,63 @@ mod imp {
         }
     }
 
+    /// Snaps a thumbnail of the given display via the macOS built-in
+    /// `screencapture` CLI, optionally resizes via `sips`, and returns it
+    /// as a `data:image/png;base64,...` URL the frontend can drop into an
+    /// `<img>` tag. Used by the display-picker overlay so the user can
+    /// see what's actually on each monitor before picking one.
+    ///
+    /// Requires Screen Recording permission — same as the rest of the
+    /// recording pipeline. Fails fast if it isn't granted; the frontend
+    /// falls back to the generic monitor icon.
+    #[tauri::command]
+    pub async fn screen_capture_thumbnail(
+        display_id: u32,
+        max_width: Option<u32>,
+    ) -> Result<String, ScreenRecorderError> {
+        use base64::Engine as _;
+        let tmp = tempfile::Builder::new()
+            .prefix("meetily_thumb_")
+            .suffix(".png")
+            .tempfile()
+            .map_err(|e| ScreenRecorderError::Io(e.to_string()))?;
+        let tmp_path = tmp.path().to_path_buf();
+        // We need the path; close the temp handle so `screencapture` can
+        // write to it without conflict.
+        drop(tmp);
+
+        let out = std::process::Command::new("screencapture")
+            .arg("-x") // silent (no shutter sound)
+            .arg("-l")
+            .arg(display_id.to_string())
+            .arg("-t")
+            .arg("png")
+            .arg(&tmp_path)
+            .output()
+            .map_err(|e| ScreenRecorderError::Io(format!("screencapture: {e}")))?;
+        if !out.status.success() {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(ScreenRecorderError::Internal(format!(
+                "screencapture failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+
+        // Optional downscale via `sips` to keep the data URL small.
+        if let Some(w) = max_width {
+            let _ = std::process::Command::new("sips")
+                .arg("-Z")
+                .arg(w.to_string())
+                .arg(&tmp_path)
+                .output();
+        }
+
+        let bytes = std::fs::read(&tmp_path).map_err(|e| ScreenRecorderError::Io(e.to_string()))?;
+        let _ = std::fs::remove_file(&tmp_path);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Ok(format!("data:image/png;base64,{}", b64))
+    }
+
     /// Opens macOS Privacy & Security → Screen & System Audio Recording so
     /// the user can grant the app permission. After they grant it, the
     /// app must be restarted for the new permission to take effect (this
@@ -243,6 +300,13 @@ mod imp {
     }
     #[tauri::command]
     pub async fn screen_open_permission_settings() -> Result<(), ScreenRecorderError> {
+        Err(ScreenRecorderError::Internal("not supported on this platform".into()))
+    }
+    #[tauri::command]
+    pub async fn screen_capture_thumbnail(
+        _display_id: u32,
+        _max_width: Option<u32>,
+    ) -> Result<String, ScreenRecorderError> {
         Err(ScreenRecorderError::Internal("not supported on this platform".into()))
     }
     #[tauri::command]
