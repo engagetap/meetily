@@ -19,6 +19,20 @@ export async function hasScreenRecordingPermission(): Promise<boolean> {
   }
 }
 
+/**
+ * Trigger the macOS Screen Recording TCC prompt if it hasn't been answered
+ * yet. Returns the post-prompt grant state. Equivalent of meetily's
+ * `trigger_microphone_permission` for the audio side — same shape.
+ */
+export async function requestScreenRecordingPermission(): Promise<boolean> {
+  try {
+    return await invoke<boolean>('screen_request_permission');
+  } catch (e) {
+    console.warn('screen_request_permission failed:', e);
+    return false;
+  }
+}
+
 export async function openScreenRecordingSettings(): Promise<void> {
   try {
     await invoke('screen_open_permission_settings');
@@ -34,6 +48,11 @@ export async function maybeStartScreenRecording(): Promise<void> {
   if (!screenEnabled) return;
 
   const captureMic = localStorage.getItem('meetily.recordMic') === 'true';
+
+  // Fire the TCC prompt up front (no-op if already answered). Without this
+  // first-time users on a fresh install never see the OS dialog because
+  // SCStream alone doesn't reliably surface it from a Tokio worker thread.
+  await requestScreenRecordingPermission();
 
   try {
     const displays = await invoke<Array<{ id: number; is_primary: boolean }>>(

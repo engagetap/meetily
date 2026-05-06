@@ -6,6 +6,7 @@ import { Monitor, MonitorOff, Check, AlertTriangle, RefreshCw } from "lucide-rea
 import {
   hasScreenRecordingPermission,
   openScreenRecordingSettings,
+  requestScreenRecordingPermission,
   setRecordScreenPref,
   setRecordMicPref,
   setDefaultDisplayPref,
@@ -94,12 +95,23 @@ export function ScreenRecordingSettings() {
                 <strong>Screen Recording permission not granted.</strong> macOS blocks
                 screen capture until you grant it.
               </p>
-              <button
-                onClick={() => openScreenRecordingSettings()}
-                className="mt-2 text-xs px-3 py-1 border border-amber-300 bg-white hover:bg-amber-100 rounded"
-              >
-                Open System Settings
-              </button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  onClick={async () => {
+                    await requestScreenRecordingPermission();
+                    refreshPermissionAndDisplays();
+                  }}
+                  className="text-xs px-3 py-1 border border-amber-300 bg-white hover:bg-amber-100 rounded"
+                >
+                  Request permission
+                </button>
+                <button
+                  onClick={() => openScreenRecordingSettings()}
+                  className="text-xs px-3 py-1 border border-amber-300 bg-white hover:bg-amber-100 rounded"
+                >
+                  Open System Settings
+                </button>
+              </div>
               <p className="text-xs text-amber-700 mt-2">
                 After granting, you must fully quit and relaunch Meetily — macOS only
                 applies new permissions on next launch.

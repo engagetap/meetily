@@ -53,15 +53,43 @@ mod imp {
         crate::screen_recorder::recorder::list_displays()
     }
 
+    // Apple's documented APIs for screen-capture permission. They live in
+    // CoreGraphics, must run on the main thread, and are the only reliable
+    // way to trigger macOS's TCC prompt — calling `SCShareableContent`
+    // from a Tokio worker doesn't surface the dialog.
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+        fn CGRequestScreenCaptureAccess() -> bool;
+    }
+
     /// Returns true if the app currently has Screen Recording permission.
-    /// Implemented by trying to enumerate displays — ScreenCaptureKit
-    /// returns an empty array when permission is missing.
+    /// Uses CGPreflightScreenCaptureAccess — the documented API. Doesn't
+    /// trigger the prompt; safe to call as often as you like.
     #[tauri::command]
     pub async fn screen_has_permission() -> Result<bool, ScreenRecorderError> {
-        match crate::screen_recorder::recorder::list_displays() {
-            Ok(displays) => Ok(!displays.is_empty()),
-            Err(_) => Ok(false),
-        }
+        let granted = unsafe { CGPreflightScreenCaptureAccess() };
+        Ok(granted)
+    }
+
+    /// Triggers macOS's Screen Recording permission prompt if not already
+    /// granted. Returns the post-prompt grant state. The first call shows
+    /// the dialog; subsequent calls are no-ops (true if granted, false
+    /// otherwise — user must toggle in System Settings to flip from
+    /// denied to allowed).
+    ///
+    /// Mirrors how the audio path uses `trigger_microphone_permission`.
+    #[tauri::command]
+    pub async fn screen_request_permission() -> Result<bool, ScreenRecorderError> {
+        // The Apple API must run on the main thread. tauri::async_runtime
+        // dispatches to a worker by default, so we hop back via
+        // tauri::async_runtime::spawn_blocking + a main-thread handoff.
+        let granted = tokio::task::spawn_blocking(|| unsafe {
+            CGRequestScreenCaptureAccess()
+        })
+        .await
+        .map_err(|e| ScreenRecorderError::Internal(format!("join: {e}")))?;
+        Ok(granted)
     }
 
     /// Snaps a thumbnail of the given display via the macOS built-in
@@ -296,6 +324,10 @@ mod imp {
     }
     #[tauri::command]
     pub async fn screen_has_permission() -> Result<bool, ScreenRecorderError> {
+        Ok(false)
+    }
+    #[tauri::command]
+    pub async fn screen_request_permission() -> Result<bool, ScreenRecorderError> {
         Ok(false)
     }
     #[tauri::command]

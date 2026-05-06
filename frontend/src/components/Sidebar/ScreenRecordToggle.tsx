@@ -3,8 +3,8 @@
 import { Monitor, MonitorOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  hasScreenRecordingPermission,
   openScreenRecordingSettings,
+  requestScreenRecordingPermission,
   setRecordScreenPref,
 } from "@/lib/screenRecording";
 import { useScreenRecordingPrefs } from "@/hooks/useScreenRecordingPrefs";
@@ -23,12 +23,15 @@ export function ScreenRecordToggle({ disabled = false }: { disabled?: boolean })
     const next = !enabled;
     setRecordScreenPref(next);
     if (next) {
-      // Verify permission so the user doesn't discover the problem mid-meeting.
-      const granted = await hasScreenRecordingPermission();
+      // Trigger the OS prompt the moment the user opts in. If macOS has
+      // never been asked, this raises the TCC dialog. If a previous
+      // decision is on file, it's a no-op and we fall through to checking
+      // the resulting state.
+      const granted = await requestScreenRecordingPermission();
       if (!granted) {
         toast.error("Screen Recording permission required", {
           description:
-            "Meetily needs Screen Recording access to capture your screen. Grant it in System Settings, then restart the app.",
+            "macOS denied screen-capture access. Grant it in System Settings → Privacy & Security → Screen & System Audio Recording, then restart the app.",
           duration: 10000,
           action: {
             label: "Open Settings",
