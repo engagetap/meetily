@@ -108,6 +108,52 @@ function formatTauriError(err: unknown): string {
   return String(err);
 }
 
+/**
+ * Custom event broadcast whenever a screen-recording preference is
+ * changed via setRecordScreenPref / setRecordMicPref / setDefaultDisplayPref.
+ * Components subscribed via `useScreenRecordingPrefs` re-read localStorage
+ * when this fires, so toggles in the sidebar and the Settings panel stay
+ * in sync.
+ */
+export const PREFS_EVENT = 'meetily.screen-recording-prefs-changed';
+
+export function setRecordScreenPref(value: boolean): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('meetily.recordScreen', value ? 'true' : 'false');
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+export function setRecordMicPref(value: boolean): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('meetily.recordMic', value ? 'true' : 'false');
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+export function setDefaultDisplayPref(displayId: string): void {
+  if (typeof window === 'undefined') return;
+  if (displayId === '') {
+    localStorage.removeItem('meetily.defaultDisplayId');
+  } else {
+    localStorage.setItem('meetily.defaultDisplayId', displayId);
+  }
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+export function getRecordScreenPref(): boolean {
+  if (typeof window === 'undefined') return true;
+  return localStorage.getItem('meetily.recordScreen') !== 'false';
+}
+
+export function getRecordMicPref(): boolean {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem('meetily.recordMic') === 'true';
+}
+
+export function getDefaultDisplayPref(): string {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('meetily.defaultDisplayId') ?? '';
+}
+
 type RecordingMeta = {
   file_path: string;
   width: number;

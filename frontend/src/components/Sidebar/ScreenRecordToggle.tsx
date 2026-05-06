@@ -1,37 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Monitor, MonitorOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   hasScreenRecordingPermission,
   openScreenRecordingSettings,
+  setRecordScreenPref,
 } from "@/lib/screenRecording";
+import { useScreenRecordingPrefs } from "@/hooks/useScreenRecordingPrefs";
 import { toast } from "sonner";
-
-const STORAGE_KEY = "meetily.recordScreen";
 
 /**
  * Sidebar toggle for the screen-recording feature. Shown next to the
- * Start Recording button. When the user flips it ON, we proactively
- * check macOS Screen Recording permission so they don't hit a silent
- * failure later.
+ * Start Recording button. Reads + writes the shared
+ * `meetily.recordScreen` pref via useScreenRecordingPrefs so the value
+ * stays in sync with the Settings panel toggle.
  */
 export function ScreenRecordToggle({ disabled = false }: { disabled?: boolean }) {
-  const [enabled, setEnabled] = useState(true);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const saved = localStorage.getItem(STORAGE_KEY);
-    setEnabled(saved === null ? true : saved !== "false");
-  }, []);
+  const { recordScreen: enabled } = useScreenRecordingPrefs();
 
   async function toggle() {
     const next = !enabled;
-    setEnabled(next);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, next ? "true" : "false");
-    }
+    setRecordScreenPref(next);
     if (next) {
       // Verify permission so the user doesn't discover the problem mid-meeting.
       const granted = await hasScreenRecordingPermission();

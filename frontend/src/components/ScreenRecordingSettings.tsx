@@ -6,11 +6,11 @@ import { Monitor, MonitorOff, Check, AlertTriangle, RefreshCw } from "lucide-rea
 import {
   hasScreenRecordingPermission,
   openScreenRecordingSettings,
+  setRecordScreenPref,
+  setRecordMicPref,
+  setDefaultDisplayPref,
 } from "@/lib/screenRecording";
-
-const KEY_RECORD_SCREEN = "meetily.recordScreen";
-const KEY_RECORD_MIC = "meetily.recordMic";
-const KEY_DEFAULT_DISPLAY = "meetily.defaultDisplayId"; // empty string = "ask each time" / use primary
+import { useScreenRecordingPrefs } from "@/hooks/useScreenRecordingPrefs";
 
 type Display = {
   id: number;
@@ -33,10 +33,8 @@ type Display = {
  */
 export function ScreenRecordingSettings() {
   const [permitted, setPermitted] = useState<boolean | null>(null);
-  const [recordScreen, setRecordScreen] = useState(true);
-  const [recordMic, setRecordMic] = useState(false);
   const [displays, setDisplays] = useState<Display[]>([]);
-  const [defaultDisplayId, setDefaultDisplayId] = useState<string>("");
+  const { recordScreen, recordMic, defaultDisplayId } = useScreenRecordingPrefs();
 
   async function refreshPermissionAndDisplays() {
     const granted = await hasScreenRecordingPermission();
@@ -50,33 +48,8 @@ export function ScreenRecordingSettings() {
   }
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    setRecordScreen(localStorage.getItem(KEY_RECORD_SCREEN) !== "false");
-    setRecordMic(localStorage.getItem(KEY_RECORD_MIC) === "true");
-    setDefaultDisplayId(localStorage.getItem(KEY_DEFAULT_DISPLAY) ?? "");
     refreshPermissionAndDisplays();
   }, []);
-
-  function toggleRecordScreen() {
-    const next = !recordScreen;
-    setRecordScreen(next);
-    localStorage.setItem(KEY_RECORD_SCREEN, next ? "true" : "false");
-  }
-
-  function toggleRecordMic() {
-    const next = !recordMic;
-    setRecordMic(next);
-    localStorage.setItem(KEY_RECORD_MIC, next ? "true" : "false");
-  }
-
-  function changeDefaultDisplay(value: string) {
-    setDefaultDisplayId(value);
-    if (value === "") {
-      localStorage.removeItem(KEY_DEFAULT_DISPLAY);
-    } else {
-      localStorage.setItem(KEY_DEFAULT_DISPLAY, value);
-    }
-  }
 
   return (
     <section className="space-y-4">
@@ -141,7 +114,7 @@ export function ScreenRecordingSettings() {
         label="Capture the screen when a meeting starts"
         description="When ON, hitting Start records both audio and screen into a synced mp4. Bookmarks and screenshots all key off this recording."
         checked={recordScreen}
-        onChange={toggleRecordScreen}
+        onChange={() => setRecordScreenPref(!recordScreen)}
         Icon={recordScreen ? Monitor : MonitorOff}
       />
 
@@ -150,7 +123,7 @@ export function ScreenRecordingSettings() {
         label="Include microphone audio in the screen recording"
         description="Mux your mic into the .mp4 alongside system audio. Requires macOS Microphone permission. Default OFF because permission denial yields a near-empty mp4."
         checked={recordMic}
-        onChange={toggleRecordMic}
+        onChange={() => setRecordMicPref(!recordMic)}
         Icon={null}
       />
 
@@ -162,7 +135,7 @@ export function ScreenRecordingSettings() {
           </label>
           <select
             value={defaultDisplayId}
-            onChange={(e) => changeDefaultDisplay(e.target.value)}
+            onChange={(e) => setDefaultDisplayPref(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded text-sm bg-white"
           >
             <option value="">Primary display ({primaryName(displays)})</option>
