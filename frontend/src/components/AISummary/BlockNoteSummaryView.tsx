@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import dynamic from 'next/dynamic';
+import { invoke } from '@tauri-apps/api/core';
 import { Summary, SummaryDataResponse, SummaryFormat, BlockNoteBlock } from '@/types';
 import { AISummary } from './index';
 import { Block } from '@blocknote/core';
@@ -11,6 +12,37 @@ import "@blocknote/shadcn/style.css";
 
 // Dynamically import BlockNote Editor to avoid SSR issues
 const Editor = dynamic(() => import('../BlockNoteEditor/Editor'), { ssr: false });
+
+/**
+ * Phase 3: rewrites markdown image references that use the `sshot:<uuid>`
+ * scheme — emitted by the Rust summary processor when it expands
+ * `[screenshot:N]` markers — into inline data URLs so the markdown parser
+ * can render them as images.
+ */
+async function resolveScreenshotUris(markdown: string): Promise<string> {
+  const findUuid = /\(sshot:([0-9a-fA-F-]+)\)/g;
+  const ids = new Set<string>();
+  for (const match of markdown.matchAll(findUuid)) {
+    ids.add(match[1]);
+  }
+  if (ids.size === 0) return markdown;
+
+  const resolved: Record<string, string> = {};
+  await Promise.all(
+    Array.from(ids).map(async (id) => {
+      try {
+        const dataUrl = await invoke<string>('screenshots_read_image', { id });
+        resolved[id] = dataUrl;
+      } catch {
+        // leave the marker; the image just won't render
+      }
+    })
+  );
+
+  return markdown.replace(/\(sshot:([0-9a-fA-F-]+)\)/g, (full, id) => {
+    return resolved[id] ? `(${resolved[id]})` : full;
+  });
+}
 
 interface BlockNoteSummaryViewProps {
   summaryData: SummaryDataResponse | Summary | null;
@@ -91,7 +123,11 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
       const loadMarkdown = async () => {
         try {
           console.log('📝 Parsing markdown to BlockNote blocks...');
-          const blocks = await editor.tryParseMarkdownToBlocks(data.markdown);
+          // Phase 3: resolve `sshot:<uuid>` image URIs (emitted by the
+          // summary processor when it expands [screenshot:N] markers)
+          // to inline data URLs so BlockNote renders them as images.
+          const resolved = await resolveScreenshotUris(data.markdown);
+          const blocks = await editor.tryParseMarkdownToBlocks(resolved);
           editor.replaceBlocks(editor.document, blocks);
           console.log('✅ Markdown parsed successfully');
 

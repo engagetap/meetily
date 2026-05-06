@@ -156,6 +156,16 @@ pub fn extract_meeting_name_from_markdown(markdown: &str) -> Option<String> {
 ///
 /// # Returns
 /// Tuple of (final_summary_markdown, number_of_chunks_processed)
+/// Information about an accepted screenshot, fed into the summary prompt
+/// so the LLM can reference it inline via `[screenshot:N]` markers.
+/// Phase 3 of the video-recording feature.
+#[derive(Debug, Clone)]
+pub struct ScreenshotForSummary {
+    pub id: String,
+    pub timestamp_ms: i64,
+    pub caption: Option<String>,
+}
+
 pub async fn generate_meeting_summary(
     client: &Client,
     provider: &LLMProvider,
@@ -172,6 +182,7 @@ pub async fn generate_meeting_summary(
     top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
+    screenshots: &[ScreenshotForSummary],
 ) -> Result<(String, i64), String> {
     // Check cancellation at the start
     if let Some(token) = cancellation_token {
@@ -323,6 +334,7 @@ pub async fn generate_meeting_summary(
 4. If a section has no relevant info, write "None noted in this section."
 5. Output **only** the completed Markdown report.
 6. If unsure about something, omit it.
+7. If `<screenshots_available>` is provided, you MAY weave each screenshot into a relevant section by writing the literal marker `[screenshot:N]` (square brackets, no quotes, no other text on the line) at the most fitting place. Use each screenshot at most once. Skip any that don't fit.
 
 **SECTION-SPECIFIC INSTRUCTIONS:**
 {}
@@ -342,6 +354,12 @@ pub async fn generate_meeting_summary(
 "#,
         content_to_summarize
     );
+
+    // Phase 3: inject available screenshots so the LLM can reference them.
+    let screenshot_block = build_screenshot_prompt_block(screenshots);
+    if !screenshot_block.is_empty() {
+        final_user_prompt.push_str(&screenshot_block);
+    }
 
     if !custom_prompt.is_empty() {
         final_user_prompt.push_str("\n\nUser Provided Context:\n\n<user_context>\n");
@@ -375,8 +393,122 @@ pub async fn generate_meeting_summary(
     .await?;
 
     // Clean the output
-    let final_markdown = clean_llm_markdown_output(&raw_markdown);
+    let cleaned_markdown = clean_llm_markdown_output(&raw_markdown);
+
+    // Phase 3: replace [screenshot:N] markers with markdown image references
+    // (`![caption](sshot:<uuid>)`). The frontend resolves sshot:<uuid> URIs
+    // to data URLs at render time so the database stays small.
+    let final_markdown = expand_screenshot_markers(&cleaned_markdown, screenshots);
 
     info!("Summary generation completed successfully");
     Ok((final_markdown, successful_chunk_count))
+}
+
+/// Builds the `<screenshots_available>` block inserted into the user prompt.
+/// Each screenshot gets a 1-based numbered marker. Empty if none available.
+fn build_screenshot_prompt_block(screenshots: &[ScreenshotForSummary]) -> String {
+    if screenshots.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "\n\n<screenshots_available>\nThe following screenshots were captured during the meeting. \
+         When relevant, weave them into the summary by writing the literal marker \
+         `[screenshot:N]` (no quotes, square brackets) on its own line at the most fitting moment. \
+         Use each marker at most once. If a screenshot doesn't fit any section, omit it.\n\n",
+    );
+    for (i, sh) in screenshots.iter().enumerate() {
+        let n = i + 1;
+        let mins = sh.timestamp_ms / 60_000;
+        let secs = (sh.timestamp_ms % 60_000) / 1_000;
+        let cap = sh.caption.as_deref().unwrap_or("(no caption)");
+        s.push_str(&format!(
+            "[screenshot:{}] timestamp={}:{:02} caption=\"{}\"\n",
+            n, mins, secs, cap
+        ));
+    }
+    s.push_str("</screenshots_available>\n");
+    s
+}
+
+/// Replaces `[screenshot:N]` markers in the LLM markdown with markdown image
+/// references (`![caption](sshot:<uuid>)`). N is 1-based and indexes into
+/// the screenshots slice the prompt was built from. Unknown indices and
+/// stray markers are left alone.
+fn expand_screenshot_markers(markdown: &str, screenshots: &[ScreenshotForSummary]) -> String {
+    if screenshots.is_empty() {
+        return markdown.to_string();
+    }
+    let re = regex::Regex::new(r"\[screenshot:(\d+)\]").expect("static regex");
+    re.replace_all(markdown, |caps: &regex::Captures| {
+        let idx: usize = match caps[1].parse::<usize>() {
+            Ok(n) if n >= 1 => n - 1,
+            _ => return caps[0].to_string(),
+        };
+        match screenshots.get(idx) {
+            Some(s) => {
+                let alt = s
+                    .caption
+                    .as_deref()
+                    .unwrap_or("Screenshot")
+                    .replace('[', "(")
+                    .replace(']', ")");
+                format!("![{}](sshot:{})", alt, s.id)
+            }
+            None => caps[0].to_string(),
+        }
+    })
+    .into_owned()
+}
+
+#[cfg(test)]
+mod summary_phase3_tests {
+    use super::*;
+
+    fn shot(id: &str, ts_ms: i64, caption: Option<&str>) -> ScreenshotForSummary {
+        ScreenshotForSummary {
+            id: id.to_string(),
+            timestamp_ms: ts_ms,
+            caption: caption.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn block_is_empty_when_no_screenshots() {
+        assert_eq!(build_screenshot_prompt_block(&[]), "");
+    }
+
+    #[test]
+    fn block_lists_numbered_screenshots() {
+        let block = build_screenshot_prompt_block(&[
+            shot("uuid-a", 65_000, Some("dashboard")),
+            shot("uuid-b", 125_500, None),
+        ]);
+        assert!(block.contains("[screenshot:1]"));
+        assert!(block.contains("timestamp=1:05"));
+        assert!(block.contains("dashboard"));
+        assert!(block.contains("[screenshot:2]"));
+        assert!(block.contains("timestamp=2:05"));
+    }
+
+    #[test]
+    fn expand_replaces_known_markers() {
+        let md = "Intro [screenshot:1].\nLater [screenshot:2] continues.";
+        let out = expand_screenshot_markers(
+            md,
+            &[
+                shot("aaa", 0, Some("first")),
+                shot("bbb", 1000, Some("second")),
+            ],
+        );
+        assert!(out.contains("![first](sshot:aaa)"));
+        assert!(out.contains("![second](sshot:bbb)"));
+    }
+
+    #[test]
+    fn expand_leaves_unknown_markers_alone() {
+        let md = "[screenshot:99] is bogus and [screenshot:1] is real.";
+        let out = expand_screenshot_markers(md, &[shot("aaa", 0, None)]);
+        assert!(out.contains("[screenshot:99]"));
+        assert!(out.contains("![Screenshot](sshot:aaa)"));
+    }
 }

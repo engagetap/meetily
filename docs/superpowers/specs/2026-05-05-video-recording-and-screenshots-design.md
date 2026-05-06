@@ -277,16 +277,22 @@ Each stage produces a runnable, testable slice; later stages do not require gutt
 - Window-only capture mode.
 - Auto-redaction of sensitive on-screen content.
 - Trimming / editing the recording itself.
-- True transcript-inline embedding — the current build adds a horizontal
-  `HighlightsStrip` below the transcript+summary split (component:
-  `frontend/src/components/MeetingDetails/HighlightsStrip.tsx`) rather
-  than interleaving images into the virtualized transcript list, which
-  would require modifying the segment type, virtualization layout, and
-  rendering path. Inline embedding is a focused follow-up.
-- LLM-side summary embedding — the spec calls for `[screenshot:id]`
-  markers in the summary prompt that the renderer expands. This needs
-  templating work in `summary/llm_client.rs` + the markdown renderer
-  on the frontend; deferred as its own session.
+- ~~True transcript-inline embedding~~ — DONE. `VirtualizedTranscriptView`
+  now accepts an optional `screenshots` array and merges it with
+  `segments` by timestamp into a single timeline; both kinds are
+  rendered (with virtualization above the threshold) using the same
+  `useVirtualizer` instance. `TranscriptPanel` fetches accepted
+  screenshots via `screenshots_list` + `screenshots_read_image` and
+  passes them down.
+- ~~LLM-side summary embedding~~ — DONE. The Rust summary processor
+  injects a `<screenshots_available>` block into the user prompt with
+  numbered markers and an instruction to weave `[screenshot:N]`
+  references into the output. After the LLM returns, those markers are
+  expanded into `![caption](sshot:<uuid>)` markdown images. The
+  frontend `BlockNoteSummaryView` resolves `sshot:<uuid>` URIs to
+  data URLs (via `screenshots_read_image`) before parsing the
+  markdown into BlockNote blocks, so the database stays small while
+  rendered summaries show the images inline.
 
 ## What's actually implemented (engagetap fork)
 

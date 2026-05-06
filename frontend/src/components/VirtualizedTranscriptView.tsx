@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useReducer, startTransition, useEffect, useState, memo } from "react";
+import { useCallback, useRef, useReducer, startTransition, useEffect, useState, useMemo, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useTranscriptStreaming } from "@/hooks/useTranscriptStreaming";
@@ -10,9 +10,25 @@ import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
 
+/// Inline screenshot row data fed into the virtualized list. Pre-loaded
+/// data URLs keep the row renderer pure / synchronous.
+export interface InlineScreenshotData {
+    id: string;
+    /** Timestamp in seconds, aligned with TranscriptSegmentData.timestamp. */
+    timestamp: number;
+    caption: string | null;
+    dataUrl: string;
+}
+
+type TimelineItem =
+    | { kind: 'segment'; data: TranscriptSegmentData }
+    | { kind: 'screenshot'; data: InlineScreenshotData };
+
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
     segments: TranscriptSegmentData[];
+    /** Optional accepted screenshots to interleave with transcript segments by timestamp. */
+    screenshots?: InlineScreenshotData[];
     /** Whether recording is in progress */
     isRecording?: boolean;
     /** Whether recording is paused */
@@ -63,6 +79,41 @@ function cleanStopWords(text: string): string {
     return cleanedText.replace(/\s+/g, ' ').trim();
 }
 
+// Memoized inline screenshot row used inside the transcript timeline.
+const InlineScreenshotRow = memo(function InlineScreenshotRow({
+    timestamp,
+    caption,
+    dataUrl,
+}: {
+    timestamp: number;
+    caption: string | null;
+    dataUrl: string;
+}) {
+    return (
+        <div className="mb-3">
+            <div className="flex items-start gap-2">
+                <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
+                    {formatRecordingTime(timestamp)}
+                </span>
+                <figure className="flex-1 m-0 border border-gray-200 rounded-md overflow-hidden bg-white">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                        src={dataUrl}
+                        alt={caption ?? "screenshot"}
+                        className="w-full block"
+                        style={{ maxHeight: 240, objectFit: "contain", background: "#000" }}
+                    />
+                    {caption && (
+                        <figcaption className="px-3 py-2 text-xs text-gray-700">
+                            {caption}
+                        </figcaption>
+                    )}
+                </figure>
+            </div>
+        </div>
+    );
+});
+
 // Memoized transcript segment component
 const TranscriptSegment = memo(function TranscriptSegment({
     id,
@@ -112,6 +163,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
 
 export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps> = ({
     segments,
+    screenshots = [],
     isRecording = false,
     isPaused = false,
     isProcessing = false,
@@ -125,6 +177,24 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     loadedCount = 0,
     onLoadMore,
 }) => {
+    // Build a single timeline merging segments + screenshots by timestamp.
+    // When timestamps tie, the screenshot lands AFTER the segment so it
+    // visually annotates the moment that just spoke about it.
+    const items: TimelineItem[] = useMemo(() => {
+        const segItems: TimelineItem[] = segments.map((s) => ({ kind: 'segment', data: s }));
+        const shotItems: TimelineItem[] = screenshots.map((s) => ({ kind: 'screenshot', data: s }));
+        const merged = [...segItems, ...shotItems];
+        merged.sort((a, b) => {
+            const ta = a.data.timestamp;
+            const tb = b.data.timestamp;
+            if (ta !== tb) return ta - tb;
+            // tiebreak: segment first, then screenshot
+            const ka = a.kind === 'segment' ? 0 : 1;
+            const kb = b.kind === 'segment' ? 0 : 1;
+            return ka - kb;
+        });
+        return merged;
+    }, [segments, screenshots]);
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
     // Ref for infinite scroll trigger element
@@ -133,12 +203,16 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Force re-render without flushSync (avoids React warning)
     const [, rerender] = useReducer((x: number) => x + 1, 0);
 
-    // Setup virtualizer for efficient rendering of large lists
+    // Setup virtualizer for efficient rendering of large lists. Counts the
+    // merged timeline (segments + interleaved screenshots) so virtualization
+    // works whether or not screenshots are present.
     const virtualizer = useVirtualizer({
-        count: segments.length,
+        count: items.length,
         getScrollElement: () => scrollRef.current,
-        estimateSize: () => 60, // Estimated height per segment
-        overscan: 10, // Render extra items above/below viewport
+        // Screenshots are taller than text rows; the virtualizer measures
+        // actual heights via measureElement so this is just a starting hint.
+        estimateSize: (i) => (items[i]?.kind === 'screenshot' ? 220 : 60),
+        overscan: 10,
         onChange: () => {
             startTransition(() => {
                 rerender();
@@ -221,7 +295,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     }, [onLoadMore, hasMore, isLoadingMore, isRecording]);
 
     // Use simple rendering for small lists, virtualization for large lists
-    const useVirtualization = segments.length >= VIRTUALIZATION_THRESHOLD;
+    const useVirtualization = items.length >= VIRTUALIZATION_THRESHOLD;
 
     return (
         <div ref={scrollRef} className="flex flex-col h-full overflow-y-auto px-4 py-2">
@@ -273,12 +347,15 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         }}
                     >
                         {virtualizer.getVirtualItems().map((virtualRow) => {
-                            const segment = segments[virtualRow.index];
-                            const isStreaming = streamingSegmentId === segment.id;
-
+                            const item = items[virtualRow.index];
+                            if (!item) return null;
+                            const key =
+                                item.kind === 'segment'
+                                    ? `seg-${item.data.id}`
+                                    : `shot-${item.data.id}`;
                             return (
                                 <div
-                                    key={segment.id}
+                                    key={key}
                                     data-index={virtualRow.index}
                                     ref={virtualizer.measureElement}
                                     style={{
@@ -289,14 +366,22 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         transform: `translateY(${virtualRow.start}px)`,
                                     }}
                                 >
-                                    <TranscriptSegment
-                                        id={segment.id}
-                                        timestamp={segment.timestamp}
-                                        text={getDisplayText(segment)}
-                                        confidence={segment.confidence}
-                                        isStreaming={isStreaming}
-                                        showConfidence={showConfidence}
-                                    />
+                                    {item.kind === 'segment' ? (
+                                        <TranscriptSegment
+                                            id={item.data.id}
+                                            timestamp={item.data.timestamp}
+                                            text={getDisplayText(item.data)}
+                                            confidence={item.data.confidence}
+                                            isStreaming={streamingSegmentId === item.data.id}
+                                            showConfidence={showConfidence}
+                                        />
+                                    ) : (
+                                        <InlineScreenshotRow
+                                            timestamp={item.data.timestamp}
+                                            caption={item.data.caption}
+                                            dataUrl={item.data.dataUrl}
+                                        />
+                                    )}
                                 </div>
                             );
                         })}
@@ -335,24 +420,34 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 // Simple rendering for small lists (better animations)
                 <>
                     <div className="space-y-1">
-                        {segments.map((segment) => {
-                            const isStreaming = streamingSegmentId === segment.id;
-
+                        {items.map((item) => {
+                            const key =
+                                item.kind === 'segment'
+                                    ? `seg-${item.data.id}`
+                                    : `shot-${item.data.id}`;
                             return (
                                 <motion.div
-                                    key={segment.id}
+                                    key={key}
                                     initial={{ opacity: 0, y: 5 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ duration: 0.15 }}
                                 >
-                                    <TranscriptSegment
-                                        id={segment.id}
-                                        timestamp={segment.timestamp}
-                                        text={getDisplayText(segment)}
-                                        confidence={segment.confidence}
-                                        isStreaming={isStreaming}
-                                        showConfidence={showConfidence}
-                                    />
+                                    {item.kind === 'segment' ? (
+                                        <TranscriptSegment
+                                            id={item.data.id}
+                                            timestamp={item.data.timestamp}
+                                            text={getDisplayText(item.data)}
+                                            confidence={item.data.confidence}
+                                            isStreaming={streamingSegmentId === item.data.id}
+                                            showConfidence={showConfidence}
+                                        />
+                                    ) : (
+                                        <InlineScreenshotRow
+                                            timestamp={item.data.timestamp}
+                                            caption={item.data.caption}
+                                            dataUrl={item.data.dataUrl}
+                                        />
+                                    )}
                                 </motion.div>
                             );
                         })}

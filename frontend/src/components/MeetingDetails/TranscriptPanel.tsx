@@ -2,9 +2,55 @@
 
 import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
-import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
+import { VirtualizedTranscriptView, InlineScreenshotData } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+
+type ScreenshotRow = {
+  id: string;
+  timestamp_ms: number;
+  caption: string | null;
+  accepted: number;
+  image_path: string | null;
+};
+
+function useInlineScreenshots(meetingId?: string): InlineScreenshotData[] {
+  const [screenshots, setScreenshots] = useState<InlineScreenshotData[]>([]);
+
+  useEffect(() => {
+    if (!meetingId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await invoke<ScreenshotRow[]>('screenshots_list', { meetingId });
+        const accepted = list.filter((s) => s.accepted === 1 && s.image_path);
+        const out: InlineScreenshotData[] = [];
+        for (const s of accepted) {
+          try {
+            const dataUrl = await invoke<string>('screenshots_read_image', { id: s.id });
+            out.push({
+              id: s.id,
+              timestamp: s.timestamp_ms / 1000, // align with transcript seconds
+              caption: s.caption,
+              dataUrl,
+            });
+          } catch {
+            // missing on disk; skip
+          }
+        }
+        if (!cancelled) setScreenshots(out);
+      } catch {
+        // command might not exist (older builds); fail silent
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId]);
+
+  return screenshots;
+}
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -49,6 +95,9 @@ export function TranscriptPanel({
   meetingFolderPath,
   onRefetchTranscripts,
 }: TranscriptPanelProps) {
+  // Phase 3: fetch accepted screenshots for inline embedding.
+  const inlineScreenshots = useInlineScreenshots(meetingId);
+
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
@@ -82,6 +131,7 @@ export function TranscriptPanel({
       <div className="flex-1 overflow-hidden pb-4">
         <VirtualizedTranscriptView
           segments={convertedSegments}
+          screenshots={inlineScreenshots}
           isRecording={isRecording}
           isPaused={false}
           isProcessing={false}

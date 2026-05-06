@@ -219,6 +219,28 @@ impl SummaryService {
         // Get app data directory for BuiltInAI provider
         let app_data_dir = _app.path().app_data_dir().ok();
 
+        // Phase 3: load accepted screenshots for the meeting so the LLM
+        // can reference them inline via [screenshot:N] markers.
+        let screenshots: Vec<crate::summary::processor::ScreenshotForSummary> = {
+            use crate::database::repositories::ScreenshotsRepository;
+            use crate::summary::processor::ScreenshotForSummary;
+            match ScreenshotsRepository::list_for_meeting(&pool, &meeting_id).await {
+                Ok(rows) => rows
+                    .into_iter()
+                    .filter(|r| r.accepted == 1 && r.image_path.is_some())
+                    .map(|r| ScreenshotForSummary {
+                        id: r.id,
+                        timestamp_ms: r.timestamp_ms,
+                        caption: r.caption,
+                    })
+                    .collect(),
+                Err(e) => {
+                    info!("summary: failed to load screenshots for {}: {} (continuing without)", meeting_id, e);
+                    Vec::new()
+                }
+            }
+        };
+
         // Generate summary
         let client = reqwest::Client::new();
         let result = generate_meeting_summary(
@@ -237,6 +259,7 @@ impl SummaryService {
             custom_openai_top_p,
             app_data_dir.as_ref(),
             Some(&cancellation_token),
+            &screenshots,
         )
         .await;
 
