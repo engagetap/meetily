@@ -41,6 +41,22 @@ echo "[dev-bundled] cargo build (debug)..."
 cd "$ROOT_DIR/frontend/src-tauri"
 cargo build 2>&1 | tail -5
 
+# 2b. Ensure the llama-helper sidecar is available. Built once on first
+# run; subsequent runs skip if the binary exists. Slow first time
+# (llama-cpp-2 pulls in a non-trivial C++ build) but only once.
+TARGET_TRIPLE=$(rustc -vV | grep "host:" | awk '{print $2}')
+HELPER_BIN_RELEASE="$ROOT_DIR/target/release/llama-helper"
+if [[ ! -x "$HELPER_BIN_RELEASE" ]]; then
+  echo "[dev-bundled] building llama-helper (one-time, ~5 min)..."
+  HELPER_FEATURES=""
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    HELPER_FEATURES="--features metal"
+  fi
+  (cd "$ROOT_DIR/llama-helper" && cargo build --release $HELPER_FEATURES) || {
+    echo "[dev-bundled] llama-helper build failed — summary generation will not work."
+  }
+fi
+
 # 3. Refresh / create the .app bundle.
 echo "[dev-bundled] refreshing $APP ..."
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -56,6 +72,13 @@ if [[ ! -f "$APP/Contents/Info.plist" ]]; then
   /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 13.0" "$APP/Contents/Info.plist" 2>/dev/null || true
 fi
 cp "$BIN" "$APP/Contents/MacOS/meetily"
+# Copy the llama-helper sidecar next to meetily (the resolver's preferred
+# lookup path). Use the target-triple-suffixed name to match the
+# production lookup convention.
+if [[ -x "$HELPER_BIN_RELEASE" ]]; then
+  cp "$HELPER_BIN_RELEASE" "$APP/Contents/MacOS/llama-helper-$TARGET_TRIPLE"
+  echo "[dev-bundled] llama-helper copied: llama-helper-$TARGET_TRIPLE"
+fi
 
 # 4. Ad-hoc sign so the TCC identity is stable.
 codesign --force --deep --sign - "$APP" 2>&1 | tail -1 || true

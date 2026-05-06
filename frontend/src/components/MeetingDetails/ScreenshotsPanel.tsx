@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Loader2 } from "lucide-react";
 import { isTauri } from "@/lib/tauriGuard";
 import { CropEditor, Crop } from "./CropEditor";
 
@@ -26,6 +27,37 @@ type EnrichResult = {
   skipped: number;
   errors: string[];
 };
+
+/**
+ * Small button wrapper that swaps in a spinner when `busy` is true and
+ * disables itself. Keeps the call-site clean and ensures users can't
+ * spam-click during a long-running command.
+ */
+function BusyButton({
+  onClick,
+  busy,
+  disabled,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  busy: boolean;
+  disabled?: boolean;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled || busy}
+      title={title}
+      className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:border-gray-400 disabled:opacity-50 inline-flex items-center gap-1.5"
+    >
+      {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+      <span>{children}</span>
+    </button>
+  );
+}
 
 function fmtMs(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
@@ -67,7 +99,10 @@ export function ScreenshotsPanel({
   const [shots, setShots] = useState<Screenshot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  // Tracks which long-running operation is in flight so we can disable
+  // the right buttons and render an inline spinner. `null` = idle.
+  const [busyOp, setBusyOp] = useState<null | "generate" | "enrich" | "transcript" | "refresh">(null);
+  const busy = busyOp !== null;
 
   // Resolve which "meeting_id" the screen recording uses. Try direct match
   // first (audio id == screen id, e.g. when ids were unified at start),
@@ -129,6 +164,7 @@ export function ScreenshotsPanel({
       setLoading(false);
       return;
     }
+    setBusyOp("refresh");
     setLoading(true);
     setError(null);
     try {
@@ -140,50 +176,60 @@ export function ScreenshotsPanel({
       setError(String(e));
     } finally {
       setLoading(false);
+      setBusyOp(null);
     }
   }
 
   async function generate() {
     setError(null);
-    setBusy(true);
+    setBusyOp("generate");
     try {
       await invoke<number>("screenshots_generate", { meetingId: activeMeetingId });
-      await load();
+      const list = await invoke<Screenshot[]>("screenshots_list", {
+        meetingId: activeMeetingId,
+      });
+      setShots(list);
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusy(false);
+      setBusyOp(null);
     }
   }
 
   async function enrich() {
     setError(null);
-    setBusy(true);
+    setBusyOp("enrich");
     try {
       const result = await invoke<EnrichResult>("screenshots_enrich_with_vision", {
         meetingId: activeMeetingId,
       });
       if (result.errors.length > 0) setError(result.errors.join("\n"));
-      await load();
+      const list = await invoke<Screenshot[]>("screenshots_list", {
+        meetingId: activeMeetingId,
+      });
+      setShots(list);
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusy(false);
+      setBusyOp(null);
     }
   }
 
   async function captionFromTranscript() {
     setError(null);
-    setBusy(true);
+    setBusyOp("transcript");
     try {
       await invoke("screenshots_caption_from_transcript", {
         meetingId: activeMeetingId,
       });
-      await load();
+      const list = await invoke<Screenshot[]>("screenshots_list", {
+        meetingId: activeMeetingId,
+      });
+      setShots(list);
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusy(false);
+      setBusyOp(null);
     }
   }
 
@@ -200,36 +246,28 @@ export function ScreenshotsPanel({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={generate}
-            disabled={busy || loading}
-            className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:border-gray-400 disabled:opacity-50"
-          >
-            Generate
-          </button>
-          <button
+          <BusyButton onClick={generate} busy={busyOp === "generate"} disabled={busy || loading}>
+            {busyOp === "generate" ? "Generating…" : "Generate"}
+          </BusyButton>
+          <BusyButton
             onClick={enrich}
+            busy={busyOp === "enrich"}
             disabled={busy || loading || pending.length === 0}
-            className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:border-gray-400 disabled:opacity-50"
             title="Use the configured Anthropic API key to caption pending candidates (vision + transcript context)"
           >
-            Caption with Claude
-          </button>
-          <button
+            {busyOp === "enrich" ? "Captioning…" : "Caption with Claude"}
+          </BusyButton>
+          <BusyButton
             onClick={captionFromTranscript}
+            busy={busyOp === "transcript"}
             disabled={busy || loading || pending.length === 0}
-            className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:border-gray-400 disabled:opacity-50"
             title="Caption from the transcript text near each screenshot (local, no API key)"
           >
-            Caption from transcript
-          </button>
-          <button
-            onClick={load}
-            disabled={busy}
-            className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:border-gray-400 disabled:opacity-50"
-          >
+            {busyOp === "transcript" ? "Captioning…" : "Caption from transcript"}
+          </BusyButton>
+          <BusyButton onClick={load} busy={busyOp === "refresh"} disabled={busy}>
             Refresh
-          </button>
+          </BusyButton>
         </div>
       </div>
 
