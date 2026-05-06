@@ -430,19 +430,18 @@ fn build_screenshot_prompt_block(screenshots: &[ScreenshotForSummary]) -> String
     s
 }
 
-/// Replaces `[screenshot:N]` markers in the LLM markdown with markdown image
-/// references (`![caption](sshot:<uuid>)`). N is 1-based and indexes into
-/// the screenshots slice the prompt was built from. Unknown indices and
-/// stray markers are left alone.
+/// Replaces `[screenshot:N]` markers in the LLM markdown with markdown
+/// image references (`![caption](sshot:<uuid>)`). N is 1-based and indexes
+/// into the screenshots slice the prompt was built from. Markers that
+/// reference an unknown index (LLM hallucination, off-by-one, etc.) are
+/// stripped from the output rather than left as raw text — the user
+/// should never see `[screenshot:5]` in their rendered summary.
 fn expand_screenshot_markers(markdown: &str, screenshots: &[ScreenshotForSummary]) -> String {
-    if screenshots.is_empty() {
-        return markdown.to_string();
-    }
-    let re = regex::Regex::new(r"\[screenshot:(\d+)\]").expect("static regex");
+    let re = regex::Regex::new(r"\s*\[screenshot:(\d+)\]\s*").expect("static regex");
     re.replace_all(markdown, |caps: &regex::Captures| {
         let idx: usize = match caps[1].parse::<usize>() {
             Ok(n) if n >= 1 => n - 1,
-            _ => return caps[0].to_string(),
+            _ => return String::new(),
         };
         match screenshots.get(idx) {
             Some(s) => {
@@ -452,9 +451,9 @@ fn expand_screenshot_markers(markdown: &str, screenshots: &[ScreenshotForSummary
                     .unwrap_or("Screenshot")
                     .replace('[', "(")
                     .replace(']', ")");
-                format!("![{}](sshot:{})", alt, s.id)
+                format!("\n\n![{}](sshot:{})\n\n", alt, s.id)
             }
-            None => caps[0].to_string(),
+            None => String::new(),
         }
     })
     .into_owned()
@@ -505,10 +504,23 @@ mod summary_phase3_tests {
     }
 
     #[test]
-    fn expand_leaves_unknown_markers_alone() {
+    fn expand_strips_unknown_markers() {
+        // The LLM sometimes emits markers that reference indices outside
+        // the provided screenshots slice. Those must NOT appear in the
+        // rendered summary — they get stripped.
         let md = "[screenshot:99] is bogus and [screenshot:1] is real.";
         let out = expand_screenshot_markers(md, &[shot("aaa", 0, None)]);
-        assert!(out.contains("[screenshot:99]"));
+        assert!(!out.contains("[screenshot:99]"));
         assert!(out.contains("![Screenshot](sshot:aaa)"));
+    }
+
+    #[test]
+    fn expand_strips_all_markers_when_no_screenshots_provided() {
+        let md = "Intro [screenshot:1] continues [screenshot:2] here.";
+        let out = expand_screenshot_markers(md, &[]);
+        assert!(!out.contains("[screenshot:"));
+        assert!(out.contains("Intro"));
+        assert!(out.contains("continues"));
+        assert!(out.contains("here."));
     }
 }

@@ -53,6 +53,31 @@ mod imp {
         crate::screen_recorder::recorder::list_displays()
     }
 
+    /// Returns true if the app currently has Screen Recording permission.
+    /// Implemented by trying to enumerate displays — ScreenCaptureKit
+    /// returns an empty array when permission is missing.
+    #[tauri::command]
+    pub async fn screen_has_permission() -> Result<bool, ScreenRecorderError> {
+        match crate::screen_recorder::recorder::list_displays() {
+            Ok(displays) => Ok(!displays.is_empty()),
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Opens macOS Privacy & Security → Screen & System Audio Recording so
+    /// the user can grant the app permission. After they grant it, the
+    /// app must be restarted for the new permission to take effect (this
+    /// is a macOS limitation, not ours).
+    #[tauri::command]
+    pub async fn screen_open_permission_settings() -> Result<(), ScreenRecorderError> {
+        let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| ScreenRecorderError::Io(format!("open settings: {e}")))?;
+        Ok(())
+    }
+
     #[tauri::command]
     pub async fn screen_is_recording(
         state: State<'_, ScreenRecorderState>,
@@ -207,6 +232,14 @@ mod imp {
     #[tauri::command]
     pub async fn screen_list_displays() -> Result<Vec<DisplayInfo>, ScreenRecorderError> {
         Ok(vec![])
+    }
+    #[tauri::command]
+    pub async fn screen_has_permission() -> Result<bool, ScreenRecorderError> {
+        Ok(false)
+    }
+    #[tauri::command]
+    pub async fn screen_open_permission_settings() -> Result<(), ScreenRecorderError> {
+        Err(ScreenRecorderError::Internal("not supported on this platform".into()))
     }
     #[tauri::command]
     pub async fn screen_is_recording(

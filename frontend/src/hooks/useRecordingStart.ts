@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { maybeStartScreenRecording } from '@/lib/screenRecording';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -123,40 +124,9 @@ export function useRecordingStart(
       );
       console.log('Backend recording started successfully');
 
-      // Phase 1A/1B: also start the screen recorder. Independent meeting_id;
-      // ScreenshotsPanel later resolves it by timestamp proximity to the
-      // audio meeting's created_at. Fail-soft — a screen-record failure
-      // (no display, missing permission, etc) must not abort the audio
-      // recording the user actually requested.
-      try {
-        const screenEnabled =
-          typeof window !== 'undefined' &&
-          localStorage.getItem('meetily.recordScreen') !== 'false'; // default ON
-        const captureMic =
-          typeof window !== 'undefined' &&
-          localStorage.getItem('meetily.recordMic') === 'true'; // default OFF (needs mic permission)
-        if (screenEnabled) {
-          const displays = await invoke<Array<{ id: number; is_primary: boolean }>>(
-            'screen_list_displays'
-          ).catch(() => [] as Array<{ id: number; is_primary: boolean }>);
-          if (displays.length > 0) {
-            const primary = displays.find((d) => d.is_primary) ?? displays[0];
-            const screenMeetingId = `screen-${crypto.randomUUID()}`;
-            await invoke('screen_start_recording', {
-              meetingId: screenMeetingId,
-              displayId: primary.id,
-              fps: 30,
-              bitrateKbps: 3000,
-              captureMic,
-            });
-            console.log('Screen recording started:', screenMeetingId);
-          } else {
-            console.warn('Screen recording skipped: no displays available (permission denied?).');
-          }
-        }
-      } catch (screenErr) {
-        console.warn('Screen recording skipped:', screenErr);
-      }
+      // Phase 1A/1B: also start the screen recorder in lock-step.
+      // Fail-soft via the helper.
+      await maybeStartScreenRecording();
 
       // Update state after successful backend start
       // Note: RECORDING status will be set by RecordingStateContext event listener
@@ -226,6 +196,9 @@ export function useRecordingStart(
               generatedMeetingTitle
             );
             console.log('Auto-start backend recording result:', result);
+
+            // Same lock-step screen recording as the manual start path.
+            await maybeStartScreenRecording();
 
             // Update UI state after successful backend start
             // Note: RECORDING status will be set by RecordingStateContext event listener
@@ -313,6 +286,9 @@ export function useRecordingStart(
           generatedMeetingTitle
         );
         console.log('Backend recording result:', result);
+
+        // Same lock-step screen recording as the other start paths.
+        await maybeStartScreenRecording();
 
         // Update UI state after successful backend start
         // Note: RECORDING status will be set by RecordingStateContext event listener

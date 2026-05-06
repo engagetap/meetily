@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { Play, Pause, Square, Mic, AlertCircle, X, Monitor, MonitorOff } from 'lucide-react';
+import { maybeStopScreenRecording } from '@/lib/screenRecording';
 import { ProcessRequest, SummaryResponse } from '@/types/summary';
 import { listen } from '@tauri-apps/api/event';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -170,17 +171,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       });
       console.log('stop_recording command completed successfully:', result);
       // Phase 1A: also stop the screen recorder if one was running.
-      // Independent from audio — fail-soft so a stopped/never-started
-      // screen recorder doesn't break the audio stop flow.
-      try {
-        const stillRecording = await invoke<boolean>('screen_is_recording');
-        if (stillRecording) {
-          await invoke('screen_stop_recording');
-          console.log('Screen recording stopped');
-        }
-      } catch (screenErr) {
-        console.warn('Screen stop skipped:', screenErr);
-      }
+      await maybeStopScreenRecording();
       setRecordingPath(savePath);
       // setShowPlayback(true);
       setIsProcessing(false);

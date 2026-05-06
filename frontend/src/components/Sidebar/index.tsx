@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload, Monitor, MonitorOff } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
+import { ScreenRecordToggle } from './ScreenRecordToggle';
 import { ConfirmationModal } from '../ConfirmationModel/confirmation-modal';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SettingTabs } from '../SettingTabs';
@@ -489,6 +490,9 @@ const Sidebar: React.FC = () => {
               <p>{isRecording ? "Recording in progress..." : "Start Recording"}</p>
             </TooltipContent>
           </Tooltip>
+
+          {/* Screen recording toggle — checks macOS permission when turned on. */}
+          <ScreenRecordToggle disabled={isRecording} />
 
           {betaFeatures.importAndRetranscribe && (
             <Tooltip>

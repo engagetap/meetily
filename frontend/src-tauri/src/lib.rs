@@ -730,6 +730,8 @@ pub fn run() {
             summary::summary_engine::commands::builtin_ai_get_recommended_model,
             // Screen recorder commands (Phase 1A)
             screen_recorder::commands::screen_list_displays,
+            screen_recorder::commands::screen_has_permission,
+            screen_recorder::commands::screen_open_permission_settings,
             screen_recorder::commands::screen_is_recording,
             screen_recorder::commands::screen_start_recording,
             screen_recorder::commands::screen_stop_recording,
