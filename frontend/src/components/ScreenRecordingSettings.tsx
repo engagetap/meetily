@@ -85,39 +85,49 @@ export function ScreenRecordingSettings() {
           {permitted == null ? (
             <p className="text-gray-600">Checking macOS Screen Recording permission…</p>
           ) : permitted ? (
-            <p className="text-green-800">
-              <strong>Screen Recording permission: granted.</strong> Meetily can capture
-              your screen during meetings.
-            </p>
+            <>
+              <p className="text-green-800">
+                <strong>Screen Recording permission: granted.</strong> Meetily can capture
+                your screen during meetings.
+              </p>
+              <p className="text-xs text-green-700 mt-1">
+                If recording still doesn't work, the OS may have a stale rule —
+                re-trigger the prompt or open Settings.
+              </p>
+            </>
           ) : (
             <>
               <p className="text-amber-800">
                 <strong>Screen Recording permission not granted.</strong> macOS blocks
                 screen capture until you grant it.
               </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  onClick={async () => {
-                    await requestScreenRecordingPermission();
-                    refreshPermissionAndDisplays();
-                  }}
-                  className="text-xs px-3 py-1 border border-amber-300 bg-white hover:bg-amber-100 rounded"
-                >
-                  Request permission
-                </button>
-                <button
-                  onClick={() => openScreenRecordingSettings()}
-                  className="text-xs px-3 py-1 border border-amber-300 bg-white hover:bg-amber-100 rounded"
-                >
-                  Open System Settings
-                </button>
-              </div>
-              <p className="text-xs text-amber-700 mt-2">
+              <p className="text-xs text-amber-700 mt-1">
                 After granting, you must fully quit and relaunch Meetily — macOS only
                 applies new permissions on next launch.
               </p>
             </>
           )}
+          {/* Permission action buttons — always visible regardless of state, so
+              the user can re-prompt or open settings even when macOS thinks
+              permission is currently granted (TCC sometimes lies after manual
+              edits to the Privacy & Security list). */}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              onClick={async () => {
+                await requestScreenRecordingPermission();
+                refreshPermissionAndDisplays();
+              }}
+              className="text-xs px-3 py-1 border border-gray-300 bg-white hover:bg-gray-100 rounded"
+            >
+              Request permission
+            </button>
+            <button
+              onClick={() => openScreenRecordingSettings()}
+              className="text-xs px-3 py-1 border border-gray-300 bg-white hover:bg-gray-100 rounded"
+            >
+              Open System Settings
+            </button>
+          </div>
         </div>
       </div>
 
