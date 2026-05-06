@@ -3,6 +3,7 @@ import { Switch } from '@/components/ui/switch';
 import { FolderOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
+import { ScreenRecordingSettings } from '@/components/ScreenRecordingSettings';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
 
@@ -245,6 +246,11 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
               disabled={saving}
             />
           </div>
+        </div>
+
+        {/* Screen Recording */}
+        <div className="border-t pt-6">
+          <ScreenRecordingSettings />
         </div>
       </div>
     </div>
