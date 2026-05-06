@@ -56,10 +56,17 @@ export async function maybeStartScreenRecording(): Promise<void> {
       return;
     }
 
-    const primary = displays.find((d) => d.is_primary) ?? displays[0];
+    // Honour the user's default-display preference if set; otherwise the
+    // OS-reported primary display.
+    const preferredId = parseInt(localStorage.getItem('meetily.defaultDisplayId') ?? '', 10);
+    const chosen =
+      (Number.isFinite(preferredId) && displays.find((d) => d.id === preferredId)) ||
+      displays.find((d) => d.is_primary) ||
+      displays[0];
+
     await invoke('screen_start_recording', {
       meetingId: `screen-${crypto.randomUUID()}`,
-      displayId: primary.id,
+      displayId: chosen.id,
       fps: 30,
       bitrateKbps: 3000,
       captureMic,

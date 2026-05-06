@@ -3,6 +3,7 @@ import { PreferenceSettings } from "@/components/PreferenceSettings";
 import { DeviceSelection } from "@/components/DeviceSelection";
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { TranscriptSettings } from "@/components/TranscriptSettings";
+import { ScreenRecordingSettings } from "@/components/ScreenRecordingSettings";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { useConfig } from "@/contexts/ConfigContext";
@@ -149,6 +150,11 @@ export function SettingsModals({
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Screen Recording Section */}
+            <div className="border-t pt-8">
+              <ScreenRecordingSettings />
             </div>
           </div>
 
