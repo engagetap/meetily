@@ -743,6 +743,7 @@ pub fn run() {
             // Phase 2: screenshot pipeline + review
             screenshots::commands::screenshots_generate,
             screenshots::commands::screenshots_resolve_recording_meeting_id,
+            screenshots::commands::screen_recording_path_for_meeting,
             screenshots::commands::screenshots_list,
             screenshots::commands::screenshots_preview_frame,
             screenshots::commands::screenshots_update,

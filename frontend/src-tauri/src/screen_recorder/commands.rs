@@ -42,10 +42,21 @@ mod imp {
         }
     }
 
-    fn recordings_dir() -> Result<PathBuf, ScreenRecorderError> {
-        let base = dirs::data_local_dir()
-            .ok_or_else(|| ScreenRecorderError::Io("no data dir".into()))?;
-        Ok(base.join("Meetily").join("recordings"))
+    /// Returns the user-configured recordings folder (the same one the
+    /// audio side writes to, configurable via Settings → Preferences →
+    /// "Recordings folder"). Falls back to the OS default if the prefs
+    /// can't be read for any reason.
+    async fn recordings_dir<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
+    ) -> Result<PathBuf, ScreenRecorderError> {
+        match crate::audio::recording_preferences::load_recording_preferences(app).await {
+            Ok(prefs) if prefs.save_folder.as_os_str().len() > 0 => Ok(prefs.save_folder),
+            _ => {
+                let base = dirs::data_local_dir()
+                    .ok_or_else(|| ScreenRecorderError::Io("no data dir".into()))?;
+                Ok(base.join("Meetily").join("recordings"))
+            }
+        }
     }
 
     #[tauri::command]
@@ -189,7 +200,8 @@ mod imp {
     }
 
     #[tauri::command]
-    pub async fn screen_start_recording(
+    pub async fn screen_start_recording<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
         meeting_id: String,
         display_id: u32,
         fps: Option<u32>,
@@ -198,7 +210,7 @@ mod imp {
         state: State<'_, ScreenRecorderState>,
         app_state: State<'_, AppState>,
     ) -> Result<String, ScreenRecorderError> {
-        let dir = recordings_dir()?;
+        let dir = recordings_dir(&app).await?;
         std::fs::create_dir_all(&dir).map_err(|e| ScreenRecorderError::Io(e.to_string()))?;
         let filename = format!(
             "{}-{}.mp4",
@@ -366,7 +378,8 @@ mod imp {
         Ok(false)
     }
     #[tauri::command]
-    pub async fn screen_start_recording(
+    pub async fn screen_start_recording<R: tauri::Runtime>(
+        _app: tauri::AppHandle<R>,
         _meeting_id: String,
         _display_id: u32,
         _fps: Option<u32>,

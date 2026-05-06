@@ -93,6 +93,22 @@ pub async fn screenshots_resolve_recording_meeting_id(
     Ok(row.map(|r| r.meeting_id))
 }
 
+/// Returns the file path of the latest finalized screen recording for the
+/// given meeting_id (typically the resolved screen-recording meeting id),
+/// or None if none exists. The frontend converts this into an asset URL
+/// for the inline video player.
+#[tauri::command]
+pub async fn screen_recording_path_for_meeting(
+    meeting_id: String,
+    app_state: State<'_, AppState>,
+) -> Result<Option<String>, ScreenshotCommandError> {
+    let pool = app_state.db_manager.pool();
+    let rec = RecordingsRepository::latest_finalized_for_meeting(pool, &meeting_id)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+    Ok(rec.map(|r| r.file_path))
+}
+
 /// List all screenshot rows (accepted + pending review) for a meeting.
 #[tauri::command]
 pub async fn screenshots_list(

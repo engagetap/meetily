@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { Loader2 } from "lucide-react";
 import { isTauri } from "@/lib/tauriGuard";
 import { CropEditor, Crop } from "./CropEditor";
@@ -96,6 +97,7 @@ export function ScreenshotsPanel({
   meetingCreatedAtMs?: number;
 }) {
   const [resolvedMeetingId, setResolvedMeetingId] = useState<string | null>(null);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [shots, setShots] = useState<Screenshot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -116,35 +118,39 @@ export function ScreenshotsPanel({
     let cancelled = false;
     (async () => {
       try {
-        const direct = await invoke<Screenshot[]>("screenshots_list", { meetingId });
+        let chosenId = meetingId;
+        let direct = await invoke<Screenshot[]>("screenshots_list", { meetingId });
         if (cancelled) return;
-        if (direct.length > 0) {
-          setResolvedMeetingId(meetingId);
-          setShots(direct);
-          setLoading(false);
-          return;
-        }
-        if (meetingCreatedAtMs != null) {
+        if (direct.length === 0 && meetingCreatedAtMs != null) {
           const screenId = await invoke<string | null>(
             "screenshots_resolve_recording_meeting_id",
             { nearMs: meetingCreatedAtMs, toleranceMs: 5 * 60 * 1000 }
           );
           if (cancelled) return;
           if (screenId) {
-            const list = await invoke<Screenshot[]>("screenshots_list", {
+            chosenId = screenId;
+            direct = await invoke<Screenshot[]>("screenshots_list", {
               meetingId: screenId,
             });
             if (cancelled) return;
-            setResolvedMeetingId(screenId);
-            setShots(list);
-            setLoading(false);
-            return;
           }
         }
-        // Nothing matched yet — keep the audio meeting id so generate / etc
-        // still work if the user records something now.
-        setResolvedMeetingId(meetingId);
-        setShots([]);
+        setResolvedMeetingId(chosenId);
+        setShots(direct);
+
+        // Look up the recorded mp4 for the resolved meeting id and convert
+        // its filesystem path into a webview-loadable asset URL.
+        try {
+          const path = await invoke<string | null>(
+            "screen_recording_path_for_meeting",
+            { meetingId: chosenId }
+          );
+          if (!cancelled) {
+            setVideoSrc(path ? convertFileSrc(path) : null);
+          }
+        } catch {
+          // No recording for this meeting; leave the player hidden.
+        }
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -273,6 +279,20 @@ export function ScreenshotsPanel({
 
       {error && (
         <pre className="m-4 text-xs text-red-600 whitespace-pre-wrap">{error}</pre>
+      )}
+
+      {videoSrc && (
+        <div className="px-4 pt-4">
+          <video
+            src={videoSrc}
+            controls
+            preload="metadata"
+            className="w-full max-h-[420px] rounded bg-black"
+          />
+          <p className="text-[11px] text-gray-500 mt-1">
+            Recording from this meeting. Scrub through to find moments you missed.
+          </p>
+        </div>
       )}
 
       <div className="p-4 space-y-4 max-h-[480px] overflow-y-auto">

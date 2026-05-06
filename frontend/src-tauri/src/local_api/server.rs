@@ -186,9 +186,17 @@ async fn post_record_start<R: tauri::Runtime>(
         return (StatusCode::CONFLICT, "already recording").into_response();
     }
 
-    let dir = match recordings_dir() {
-        Ok(d) => d,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    let dir = match crate::audio::recording_preferences::load_recording_preferences(&ctx.app)
+        .await
+        .ok()
+        .filter(|p| p.save_folder.as_os_str().len() > 0)
+        .map(|p| p.save_folder)
+    {
+        Some(d) => d,
+        None => match recordings_dir() {
+            Ok(d) => d,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        },
     };
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("io: {e}")).into_response();
