@@ -7,7 +7,7 @@
 export function isTauri(): boolean {
   return (
     typeof window !== "undefined" &&
-    // @ts-expect-error -- Tauri injects this at runtime
-    typeof window.__TAURI_INTERNALS__ !== "undefined"
+    typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
+      "undefined"
   );
 }
