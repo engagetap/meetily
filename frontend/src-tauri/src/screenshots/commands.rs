@@ -71,6 +71,28 @@ pub async fn screenshots_generate(
     Ok(total)
 }
 
+/// Resolves a screen recording's `meeting_id` (which was generated
+/// independently of the audio meeting's id) from a wall-clock timestamp —
+/// typically the audio meeting's `created_at`. The screen recording rows
+/// in `meeting_recordings` use UUIDs assigned at start time; this lets
+/// the meeting-details panel find the right one by time proximity.
+///
+/// Returns `None` if no recording's `started_at` is within
+/// `tolerance_ms` of `near_ms`. Default tolerance is 5 minutes.
+#[tauri::command]
+pub async fn screenshots_resolve_recording_meeting_id(
+    near_ms: i64,
+    tolerance_ms: Option<i64>,
+    app_state: State<'_, AppState>,
+) -> Result<Option<String>, ScreenshotCommandError> {
+    let pool = app_state.db_manager.pool();
+    let tol = tolerance_ms.unwrap_or(5 * 60 * 1000);
+    let row = RecordingsRepository::nearest_to_timestamp(pool, near_ms, tol)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+    Ok(row.map(|r| r.meeting_id))
+}
+
 /// List all screenshot rows (accepted + pending review) for a meeting.
 #[tauri::command]
 pub async fn screenshots_list(

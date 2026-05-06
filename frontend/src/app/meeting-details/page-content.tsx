@@ -8,7 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
-import { HighlightsStrip } from '@/components/MeetingDetails/HighlightsStrip';
+import { ScreenshotsPanel } from '@/components/MeetingDetails/ScreenshotsPanel';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 
 // Custom hooks
@@ -229,7 +229,12 @@ export default function PageContent({
           onOpenModelSettings={handleRegisterModalOpen}
         />
       </div>
-      <HighlightsStrip meetingId={meeting.id} />
+      <ScreenshotsPanel
+        meetingId={meeting.id}
+        meetingCreatedAtMs={
+          meeting.created_at ? new Date(meeting.created_at).getTime() : undefined
+        }
+      />
     </motion.div>
   );
 }

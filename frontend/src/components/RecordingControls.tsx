@@ -152,6 +152,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         }
       });
       console.log('stop_recording command completed successfully:', result);
+      // Phase 1A: also stop the screen recorder if one was running.
+      // Independent from audio — fail-soft so a stopped/never-started
+      // screen recorder doesn't break the audio stop flow.
+      try {
+        const stillRecording = await invoke<boolean>('screen_is_recording');
+        if (stillRecording) {
+          await invoke('screen_stop_recording');
+          console.log('Screen recording stopped');
+        }
+      } catch (screenErr) {
+        console.warn('Screen stop skipped:', screenErr);
+      }
       setRecordingPath(savePath);
       // setShowPlayback(true);
       setIsProcessing(false);

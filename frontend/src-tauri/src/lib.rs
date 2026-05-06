@@ -738,6 +738,7 @@ pub fn run() {
             local_api::commands::local_api_regenerate_token,
             // Phase 2: screenshot pipeline + review
             screenshots::commands::screenshots_generate,
+            screenshots::commands::screenshots_resolve_recording_meeting_id,
             screenshots::commands::screenshots_list,
             screenshots::commands::screenshots_preview_frame,
             screenshots::commands::screenshots_update,

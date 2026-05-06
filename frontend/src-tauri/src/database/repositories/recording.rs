@@ -89,6 +89,26 @@ impl RecordingsRepository {
         .fetch_optional(pool)
         .await
     }
+
+    /// Returns the recording whose `started_at` is closest to `near_ms` and
+    /// within `tolerance_ms`. Used to link a screen recording to an audio
+    /// meeting whose ids were generated independently (proximity match).
+    pub async fn nearest_to_timestamp(
+        pool: &SqlitePool,
+        near_ms: i64,
+        tolerance_ms: i64,
+    ) -> Result<Option<MeetingRecording>, sqlx::Error> {
+        sqlx::query_as::<_, MeetingRecording>(
+            "SELECT * FROM meeting_recordings
+             WHERE ABS(started_at - ?) <= ?
+             ORDER BY ABS(started_at - ?) ASC LIMIT 1",
+        )
+        .bind(near_ms)
+        .bind(tolerance_ms)
+        .bind(near_ms)
+        .fetch_optional(pool)
+        .await
+    }
 }
 
 #[cfg(test)]

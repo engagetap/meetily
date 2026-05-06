@@ -123,6 +123,41 @@ export function useRecordingStart(
       );
       console.log('Backend recording started successfully');
 
+      // Phase 1A/1B: also start the screen recorder. Independent meeting_id;
+      // ScreenshotsPanel later resolves it by timestamp proximity to the
+      // audio meeting's created_at. Fail-soft — a screen-record failure
+      // (no display, missing permission, etc) must not abort the audio
+      // recording the user actually requested.
+      try {
+        const screenEnabled =
+          typeof window !== 'undefined' &&
+          localStorage.getItem('meetily.recordScreen') !== 'false'; // default ON
+        const captureMic =
+          typeof window !== 'undefined' &&
+          localStorage.getItem('meetily.recordMic') === 'true'; // default OFF (needs mic permission)
+        if (screenEnabled) {
+          const displays = await invoke<Array<{ id: number; is_primary: boolean }>>(
+            'screen_list_displays'
+          ).catch(() => [] as Array<{ id: number; is_primary: boolean }>);
+          if (displays.length > 0) {
+            const primary = displays.find((d) => d.is_primary) ?? displays[0];
+            const screenMeetingId = `screen-${crypto.randomUUID()}`;
+            await invoke('screen_start_recording', {
+              meetingId: screenMeetingId,
+              displayId: primary.id,
+              fps: 30,
+              bitrateKbps: 3000,
+              captureMic,
+            });
+            console.log('Screen recording started:', screenMeetingId);
+          } else {
+            console.warn('Screen recording skipped: no displays available (permission denied?).');
+          }
+        }
+      } catch (screenErr) {
+        console.warn('Screen recording skipped:', screenErr);
+      }
+
       // Update state after successful backend start
       // Note: RECORDING status will be set by RecordingStateContext event listener
       console.log('Setting isRecordingState to true');
