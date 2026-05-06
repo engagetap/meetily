@@ -6,9 +6,42 @@ import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
+import Script from 'next/script'
 import { Toaster, toast } from 'sonner'
 import { DisplayPickerOverlay } from '@/components/DisplayPicker/DisplayPickerOverlay'
 import { ChunkErrorReloader } from '@/components/ChunkErrorReloader'
+
+// Inline auto-reload script: runs before any chunked JS, so it can recover
+// from a ChunkLoadError on layout.js itself — the case
+// ChunkErrorReloader can't catch (it's inside the chunk that fails to
+// load). Static literal, no untrusted input.
+const CHUNK_RELOAD_SCRIPT = [
+  '(function () {',
+  '  var reloaded = false;',
+  '  function isChunkErr(e) {',
+  '    if (!e) return false;',
+  '    var name = (e.name || (e.error && e.error.name)) || "";',
+  '    var msg = (e.message || (e.error && e.error.message) || (e.reason && e.reason.message)) || "";',
+  '    if (typeof e === "string") msg = e;',
+  '    return name.indexOf("ChunkLoadError") !== -1 ||',
+  '           msg.indexOf("ChunkLoadError") !== -1 ||',
+  '           msg.indexOf("Loading chunk") !== -1 ||',
+  '           msg.indexOf("Loading CSS chunk") !== -1;',
+  '  }',
+  '  function go(reason) {',
+  '    if (reloaded) return;',
+  '    reloaded = true;',
+  '    console.warn("inline auto-reload:", reason);',
+  '    setTimeout(function () { window.location.reload(); }, 50);',
+  '  }',
+  '  window.addEventListener("error", function (ev) {',
+  '    if (isChunkErr(ev.error || ev.message)) go(ev.error || ev.message);',
+  '  });',
+  '  window.addEventListener("unhandledrejection", function (ev) {',
+  '    if (isChunkErr(ev.reason)) go(ev.reason);',
+  '  });',
+  '})();',
+].join('\n')
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
@@ -234,6 +267,11 @@ export default function RootLayout({
 
   return (
     <html lang="en">
+      <head>
+        <Script id="chunk-reload" strategy="beforeInteractive">
+          {CHUNK_RELOAD_SCRIPT}
+        </Script>
+      </head>
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
         <AnalyticsProvider>
           <RecordingStateProvider>
