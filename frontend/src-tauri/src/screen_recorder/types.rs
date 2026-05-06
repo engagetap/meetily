@@ -18,6 +18,10 @@ pub struct RecordingMeta {
     pub codec: String,
     pub display_id: u32,
     pub duration_ms: u64,
+    /// The meeting_id this recording was bound to. Set on stop. Optional
+    /// for backward compatibility with older serializations.
+    #[serde(default)]
+    pub meeting_id: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]

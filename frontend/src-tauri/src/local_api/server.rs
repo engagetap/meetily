@@ -256,7 +256,7 @@ async fn post_record_stop<R: tauri::Runtime>(
         let recorder_state = ctx
             .app
             .state::<crate::screen_recorder::commands::ScreenRecorderState>();
-        let meta = match recorder_state.recorder.stop() {
+        let mut meta = match recorder_state.recorder.stop() {
             Ok(m) => m,
             Err(e) => return (StatusCode::CONFLICT, format!("{e:?}")).into_response(),
         };
@@ -274,6 +274,7 @@ async fn post_record_stop<R: tauri::Runtime>(
                 Some(&meta.codec),
             )
             .await;
+            meta.meeting_id = Some(info.meeting_id);
         }
         Json(meta).into_response()
     }

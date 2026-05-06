@@ -136,7 +136,7 @@ mod imp {
         state: State<'_, ScreenRecorderState>,
         app_state: State<'_, AppState>,
     ) -> Result<RecordingMeta, ScreenRecorderError> {
-        let meta = state.recorder.stop()?;
+        let mut meta = state.recorder.stop()?;
 
         let mut cur = state.active.lock().await;
         if let Some(info) = cur.take() {
@@ -151,6 +151,10 @@ mod imp {
                 Some(&meta.codec),
             )
             .await;
+            // Surface the screen recording's meeting_id so the frontend can
+            // immediately auto-generate screenshot candidates without having
+            // to round-trip through the timestamp-proximity resolver.
+            meta.meeting_id = Some(info.meeting_id);
         }
         Ok(meta)
     }

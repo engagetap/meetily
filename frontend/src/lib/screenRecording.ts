@@ -108,16 +108,48 @@ function formatTauriError(err: unknown): string {
   return String(err);
 }
 
+type RecordingMeta = {
+  file_path: string;
+  width: number;
+  height: number;
+  fps: number;
+  codec: string;
+  display_id: number;
+  duration_ms: number;
+  meeting_id?: string | null;
+};
+
 /**
- * Stops the screen recorder if one is running. No-op otherwise. Same
- * fail-soft contract as start.
+ * Stops the screen recorder if one is running. After a successful stop,
+ * auto-generates screenshot candidates (bookmarks + frame-diff) for the
+ * meeting so the user lands on the meeting-details page with a populated
+ * Screenshots panel — no manual Generate click required.
+ *
+ * Fail-soft on every step.
  */
 export async function maybeStopScreenRecording(): Promise<void> {
   try {
     const stillRecording = await invoke<boolean>('screen_is_recording');
-    if (stillRecording) {
-      await invoke('screen_stop_recording');
-      console.log('Screen recording stopped');
+    if (!stillRecording) return;
+
+    const meta = await invoke<RecordingMeta>('screen_stop_recording');
+    console.log('Screen recording stopped:', meta);
+
+    if (meta.meeting_id) {
+      try {
+        const count = await invoke<number>('screenshots_generate', {
+          meetingId: meta.meeting_id,
+        });
+        console.log(`Auto-generated ${count} screenshot candidate(s)`);
+        if (count > 0) {
+          toast.success(`Generated ${count} screenshot candidate${count === 1 ? '' : 's'}`, {
+            description: 'Open the meeting to review them.',
+            duration: 5000,
+          });
+        }
+      } catch (genErr) {
+        console.warn('Auto-generate failed:', genErr);
+      }
     }
   } catch (err) {
     console.warn('Screen stop skipped:', err);

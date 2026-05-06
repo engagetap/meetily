@@ -173,6 +173,7 @@ impl ScreenRecorder {
             codec: "h264".to_string(),
             display_id: session.display_id,
             duration_ms: session.started_at.elapsed().as_millis() as u64,
+            meeting_id: None, // populated by the Tauri command from session state
         })
     }
 }
