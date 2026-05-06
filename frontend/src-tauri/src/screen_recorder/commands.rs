@@ -92,60 +92,78 @@ mod imp {
         Ok(granted)
     }
 
-    /// Snaps a thumbnail of the given display via the macOS built-in
-    /// `screencapture` CLI, optionally resizes via `sips`, and returns it
-    /// as a `data:image/png;base64,...` URL the frontend can drop into an
-    /// `<img>` tag. Used by the display-picker overlay so the user can
-    /// see what's actually on each monitor before picking one.
-    ///
-    /// Requires Screen Recording permission — same as the rest of the
-    /// recording pipeline. Fails fast if it isn't granted; the frontend
-    /// falls back to the generic monitor icon.
+    /// Snaps a thumbnail of the given display using cidre's
+    /// `SCScreenshotManager.captureImage` — runs in-process so it
+    /// inherits Meetily's TCC permission. Encodes to PNG via
+    /// `CGImageDestination` and returns a `data:image/png;base64,...`
+    /// URL. Falls back to the generic monitor icon on error.
     #[tauri::command]
     pub async fn screen_capture_thumbnail(
         display_id: u32,
         max_width: Option<u32>,
     ) -> Result<String, ScreenRecorderError> {
+        // The cidre objects involved (cf::DataMut, cg::Image, sc::*) aren't
+        // `Send`, so we can't `.await` across them inside an async fn — the
+        // Tauri command future would lose Send. Run the whole thing inside
+        // block_in_place so the borrow stays on a single thread.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                capture_thumbnail_inner(display_id, max_width).await
+            })
+        })
+    }
+
+    async fn capture_thumbnail_inner(
+        display_id: u32,
+        max_width: Option<u32>,
+    ) -> Result<String, ScreenRecorderError> {
         use base64::Engine as _;
-        let tmp = tempfile::Builder::new()
-            .prefix("meetily_thumb_")
-            .suffix(".png")
-            .tempfile()
-            .map_err(|e| ScreenRecorderError::Io(e.to_string()))?;
-        let tmp_path = tmp.path().to_path_buf();
-        // We need the path; close the temp handle so `screencapture` can
-        // write to it without conflict.
-        drop(tmp);
+        use cidre::{cf, cg, cm, ns, sc};
 
-        let out = std::process::Command::new("screencapture")
-            .arg("-x") // silent (no shutter sound)
-            .arg("-l")
-            .arg(display_id.to_string())
-            .arg("-t")
-            .arg("png")
-            .arg(&tmp_path)
-            .output()
-            .map_err(|e| ScreenRecorderError::Io(format!("screencapture: {e}")))?;
-        if !out.status.success() {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(ScreenRecorderError::Internal(format!(
-                "screencapture failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            )));
+        let content = sc::ShareableContent::current()
+            .await
+            .map_err(|e| ScreenRecorderError::Internal(format!("shareable content: {:?}", e)))?;
+        let displays = content.displays();
+        let display = displays
+            .iter()
+            .find(|d| d.display_id().0 == display_id)
+            .ok_or(ScreenRecorderError::DisplayNotFound(display_id))?;
+
+        let windows = ns::Array::new();
+        let filter = sc::ContentFilter::with_display_excluding_windows(&display, &windows);
+        let mut cfg = sc::StreamCfg::new();
+        let target = max_width.unwrap_or(640) as usize;
+        let dw = display.width() as usize;
+        let dh = display.height() as usize;
+        let (out_w, out_h) = if dw <= target {
+            (dw, dh)
+        } else {
+            let scale = target as f64 / dw as f64;
+            ((dw as f64 * scale) as usize, (dh as f64 * scale) as usize)
+        };
+        cfg.set_width(out_w);
+        cfg.set_height(out_h);
+        cfg.set_minimum_frame_interval(cm::Time::new(1, 60));
+        cfg.set_captures_audio(false);
+        cfg.set_shows_cursor(true);
+
+        let cg_image = sc::ScreenshotManager::capture_image(&filter, &cfg)
+            .await
+            .map_err(|e| ScreenRecorderError::Internal(format!("capture: {:?}", e)))?;
+
+        let mut data = cf::DataMut::with_capacity(0);
+        let png_uti = cf::String::from_str("public.png");
+        let mut dst = cg::ImageDst::with_data(&mut data, &png_uti, 1)
+            .ok_or_else(|| ScreenRecorderError::Internal("ImageDst create failed".into()))?;
+        dst.add_image(&cg_image, None);
+        if !dst.finalize() {
+            return Err(ScreenRecorderError::Internal(
+                "ImageDst finalize failed".into(),
+            ));
         }
 
-        // Optional downscale via `sips` to keep the data URL small.
-        if let Some(w) = max_width {
-            let _ = std::process::Command::new("sips")
-                .arg("-Z")
-                .arg(w.to_string())
-                .arg(&tmp_path)
-                .output();
-        }
-
-        let bytes = std::fs::read(&tmp_path).map_err(|e| ScreenRecorderError::Io(e.to_string()))?;
-        let _ = std::fs::remove_file(&tmp_path);
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let bytes: &[u8] = data.as_slice();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
         Ok(format!("data:image/png;base64,{}", b64))
     }
 
