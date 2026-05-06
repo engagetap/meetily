@@ -744,6 +744,7 @@ pub fn run() {
             screenshots::commands::screenshots_accept,
             screenshots::commands::screenshots_reject,
             screenshots::commands::screenshots_read_image,
+            screenshots::commands::screenshots_enrich_with_vision,
             openrouter::get_openrouter_models,
             audio::recording_preferences::get_recording_preferences,
             audio::recording_preferences::set_recording_preferences,

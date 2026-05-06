@@ -64,6 +64,25 @@ export default function ReviewPage() {
     }
   }
 
+  async function enrich() {
+    setError(null);
+    try {
+      const result = await invoke<{
+        processed: number;
+        updated: number;
+        skipped: number;
+        errors: string[];
+      }>("screenshots_enrich_with_vision", { meetingId });
+      console.log("enrichment", result);
+      if (result.errors.length > 0) {
+        setError(result.errors.join("\n"));
+      }
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -78,12 +97,20 @@ export default function ReviewPage() {
 
       <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
         <button onClick={generate} style={{ padding: "8px 16px" }}>
-          Generate from bookmarks
+          Generate (bookmarks + frame-diff)
+        </button>
+        <button onClick={enrich} style={{ padding: "8px 16px" }}>
+          Enrich with Claude vision
         </button>
         <button onClick={load} style={{ padding: "8px 16px" }}>
           Refresh
         </button>
       </div>
+      <p style={{ color: "#666", fontSize: 12, marginTop: 4 }}>
+        Vision uses your existing Anthropic API key from Settings. No key →
+        no-op. Captions and a confidence score are filled in for pending
+        candidates only.
+      </p>
 
       {error && (
         <pre

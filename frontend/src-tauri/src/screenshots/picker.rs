@@ -1,13 +1,18 @@
+use std::path::Path;
+
 use sqlx::SqlitePool;
 
 use crate::database::repositories::{
     BookmarksRepository, ScreenshotInput, ScreenshotsRepository,
 };
+use crate::screenshots::scanner::scan_for_novel_frames;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PickerError {
     #[error("db error: {0}")]
     Db(String),
+    #[error("scanner error: {0}")]
+    Scanner(String),
 }
 
 /// Phase 2 first-pass picker: every bookmark on `meeting_id` becomes a
@@ -43,6 +48,57 @@ pub async fn generate_candidates_from_bookmarks(
         count += 1;
     }
 
+    Ok(count)
+}
+
+/// Phase 2.5: produces "frame-diff" candidates by scanning the video for
+/// stable + novel frames at low fps. Each surviving timestamp becomes a
+/// pending (not pre-accepted) screenshot row so the user reviews it before
+/// it lands in the highlights gallery.
+///
+/// Suppresses any frame-diff candidate whose timestamp is within
+/// `dedup_tolerance_ms` of an existing candidate (typically a bookmark)
+/// to avoid showing the user near-duplicates.
+pub async fn generate_frame_diff_candidates(
+    pool: &SqlitePool,
+    meeting_id: &str,
+    video_path: &Path,
+    sample_fps: u32,
+    max_candidates: usize,
+    dedup_tolerance_ms: i64,
+) -> Result<usize, PickerError> {
+    let proposed = tokio::task::block_in_place(|| {
+        scan_for_novel_frames(video_path, sample_fps, max_candidates)
+    })
+    .map_err(|e| PickerError::Scanner(e.to_string()))?;
+
+    let existing = ScreenshotsRepository::list_for_meeting(pool, meeting_id)
+        .await
+        .map_err(|e| PickerError::Db(e.to_string()))?;
+    let existing_ts: Vec<i64> = existing.iter().map(|s| s.timestamp_ms).collect();
+
+    let mut count = 0;
+    for ts in proposed {
+        let too_close = existing_ts
+            .iter()
+            .any(|e| (e - ts).abs() <= dedup_tolerance_ms);
+        if too_close {
+            continue;
+        }
+        let input = ScreenshotInput {
+            meeting_id,
+            timestamp_ms: ts,
+            crop: None,
+            caption: None,
+            source: "frame_diff",
+            confidence: Some(0.5),
+            accepted: false,
+        };
+        ScreenshotsRepository::insert(pool, input)
+            .await
+            .map_err(|e| PickerError::Db(e.to_string()))?;
+        count += 1;
+    }
     Ok(count)
 }
 

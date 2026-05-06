@@ -277,3 +277,37 @@ Each stage produces a runnable, testable slice; later stages do not require gutt
 - Window-only capture mode.
 - Auto-redaction of sensitive on-screen content.
 - Trimming / editing the recording itself.
+- True transcript-inline embedding — the current build adds a horizontal
+  `HighlightsStrip` below the transcript+summary split (component:
+  `frontend/src/components/MeetingDetails/HighlightsStrip.tsx`) rather
+  than interleaving images into the virtualized transcript list, which
+  would require modifying the segment type, virtualization layout, and
+  rendering path. Inline embedding is a focused follow-up.
+- LLM-side summary embedding — the spec calls for `[screenshot:id]`
+  markers in the summary prompt that the renderer expands. This needs
+  templating work in `summary/llm_client.rs` + the markdown renderer
+  on the frontend; deferred as its own session.
+
+## What's actually implemented (engagetap fork)
+
+- **Phase 1A:** `screen_recorder` Rust module using cidre +
+  SCRecordingOutput, four Tauri commands, `meeting_recordings` /
+  `meeting_bookmarks` / `meeting_screenshots` tables and repositories.
+  macOS 15+ floor accepted.
+- **Phase 1B:** `bookmark_now` command, ⇧⌘B global hotkey via
+  `tauri-plugin-global-shortcut`, axum-based local HTTP API
+  (`/bookmark` / `/status` / `/record/start` / `/record/stop`) with
+  bearer-token auth, persisted config at
+  `~/Library/Application Support/Meetily/api.json`.
+- **Phase 2:** `screenshots` Rust module — ffmpeg-based frame extractor,
+  bookmarks-to-candidates picker, frame-diff scanner (sum-of-absolute
+  differences over 32×18 luma thumbnails, configurable max + dedup),
+  Scribe-style review UI (`/dev/review/[meetingId]`) with timestamp
+  scrub + crop + caption + accept/reject, highlights gallery
+  (`/dev/highlights/[meetingId]`), `HighlightsStrip` integrated into
+  the existing meeting-details page.
+- **Phase 3:** Cloud vision enrichment via Anthropic Claude (uses the
+  existing claude API key from Settings; no-op if absent).
+- **Mic capture:** opt-in via `capture_mic` flag on
+  `screen_start_recording` (the local API mirrors it). When enabled,
+  mic audio is muxed into the mp4 by SCRecordingOutput automatically.

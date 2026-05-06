@@ -9,6 +9,10 @@
 pub mod commands;
 pub mod extractor;
 pub mod picker;
+pub mod scanner;
+pub mod vision;
 
 pub use extractor::{extract_frame, CropRect, ExtractError};
-pub use picker::{generate_candidates_from_bookmarks, PickerError};
+pub use picker::{generate_candidates_from_bookmarks, generate_frame_diff_candidates, PickerError};
+pub use scanner::scan_for_novel_frames;
+pub use vision::{score_with_anthropic, VisionError, VisionScore};

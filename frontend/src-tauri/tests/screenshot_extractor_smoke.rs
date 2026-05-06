@@ -27,7 +27,7 @@ fn extracts_a_png_frame_from_a_real_recording() {
         let _ = std::fs::remove_file(&tmp);
 
         let recorder = ScreenRecorder::new();
-        recorder.start(primary.id, &tmp, 30, 3000).expect("start");
+        recorder.start(primary.id, &tmp, 30, 3000, false).expect("start");
         sleep(Duration::from_secs(2));
         recorder.stop().expect("stop");
         // Tiny grace period for the file to be fully flushed.

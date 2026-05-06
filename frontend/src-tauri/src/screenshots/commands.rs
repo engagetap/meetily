@@ -4,9 +4,11 @@ use base64::Engine as _;
 use tauri::State;
 
 use crate::database::models::MeetingScreenshot;
+use crate::database::repositories::setting::SettingsRepository;
 use crate::database::repositories::{RecordingsRepository, ScreenshotsRepository};
 use crate::screenshots::extractor::{extract_frame, CropRect};
-use crate::screenshots::picker::generate_candidates_from_bookmarks;
+use crate::screenshots::picker::{generate_candidates_from_bookmarks, generate_frame_diff_candidates};
+use crate::screenshots::vision::score_with_anthropic;
 use crate::state::AppState;
 
 #[derive(Debug, thiserror::Error, serde::Serialize)]
@@ -32,17 +34,41 @@ fn screenshots_dir(meeting_id: &str) -> Result<PathBuf, ScreenshotCommandError> 
     Ok(dir)
 }
 
-/// Generate candidate screenshots for a meeting from its bookmarks.
-/// Returns the number of candidates produced.
+/// Generate candidate screenshots for a meeting from its bookmarks (always)
+/// and from frame-diff scanning of the latest recording (when one is
+/// available). Returns the total number of new rows created.
 #[tauri::command]
 pub async fn screenshots_generate(
     meeting_id: String,
     app_state: State<'_, AppState>,
 ) -> Result<usize, ScreenshotCommandError> {
     let pool = app_state.db_manager.pool();
-    generate_candidates_from_bookmarks(pool, &meeting_id)
+    let mut total = 0;
+
+    total += generate_candidates_from_bookmarks(pool, &meeting_id)
         .await
-        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+
+    // If we have a finalized recording, also run frame-diff. Defaults
+    // (sample_fps=1, max=12, dedup ±1s) match the spec; refining these is a
+    // settings-panel concern for later.
+    if let Some(rec) = RecordingsRepository::latest_finalized_for_meeting(pool, &meeting_id)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?
+    {
+        total += generate_frame_diff_candidates(
+            pool,
+            &meeting_id,
+            std::path::Path::new(&rec.file_path),
+            1,
+            12,
+            1_000,
+        )
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+    }
+
+    Ok(total)
 }
 
 /// List all screenshot rows (accepted + pending review) for a meeting.
@@ -181,6 +207,125 @@ pub async fn screenshots_reject(
     ScreenshotsRepository::set_rejected(pool, &id)
         .await
         .map_err(|e| ScreenshotCommandError::Db(e.to_string()))
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct EnrichmentResult {
+    pub processed: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+/// Enrich pending (not-yet-accepted) screenshot candidates by sending each
+/// extracted frame to Anthropic's vision API and storing the returned score
+/// + caption. Skips silently if the user has not configured a Claude API
+/// key. Caption + confidence are written; `accepted` is left untouched so
+/// the user still reviews them.
+#[tauri::command]
+pub async fn screenshots_enrich_with_vision(
+    meeting_id: String,
+    app_state: State<'_, AppState>,
+) -> Result<EnrichmentResult, ScreenshotCommandError> {
+    let pool = app_state.db_manager.pool();
+
+    let api_key = SettingsRepository::get_api_key(pool, "claude")
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?
+        .filter(|k| !k.is_empty());
+
+    let api_key = match api_key {
+        Some(k) => k,
+        None => {
+            return Ok(EnrichmentResult {
+                processed: 0,
+                updated: 0,
+                skipped: 0,
+                errors: vec!["no Anthropic API key configured (Settings → AI provider)".into()],
+            });
+        }
+    };
+
+    let rec = RecordingsRepository::latest_finalized_for_meeting(pool, &meeting_id)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?
+        .ok_or_else(|| ScreenshotCommandError::NoRecording(meeting_id.clone()))?;
+
+    let shots = ScreenshotsRepository::list_for_meeting(pool, &meeting_id)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+
+    // Only enrich rows the user hasn't already curated (no caption + not accepted).
+    let pending: Vec<_> = shots
+        .into_iter()
+        .filter(|s| s.accepted == 0 && s.caption.as_deref().unwrap_or("").is_empty())
+        .collect();
+
+    let mut updated = 0;
+    let mut errors: Vec<String> = Vec::new();
+    let processed = pending.len();
+
+    for s in &pending {
+        let video_path = rec.file_path.clone();
+        let ts = s.timestamp_ms;
+        let crop = match (s.crop_x, s.crop_y, s.crop_w, s.crop_h) {
+            (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => Some(CropRect { x, y, w, h }),
+            _ => None,
+        };
+
+        let bytes = tokio::task::spawn_blocking(move || {
+            extract_frame(std::path::Path::new(&video_path), ts, crop)
+        })
+        .await
+        .map_err(|e| ScreenshotCommandError::Ffmpeg(format!("join: {e}")))?;
+
+        let bytes = match bytes {
+            Ok(b) => b,
+            Err(e) => {
+                errors.push(format!("{}: extract: {}", s.id, e));
+                continue;
+            }
+        };
+
+        match score_with_anthropic(&api_key, &bytes, None).await {
+            Ok(score) => {
+                // Persist by re-using update_edit_fields (timestamp/crop unchanged, caption replaced)
+                let crop_tuple = match (s.crop_x, s.crop_y, s.crop_w, s.crop_h) {
+                    (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
+                    _ => None,
+                };
+                if let Err(e) = ScreenshotsRepository::update_edit_fields(
+                    pool,
+                    &s.id,
+                    s.timestamp_ms,
+                    crop_tuple,
+                    Some(&score.caption),
+                )
+                .await
+                {
+                    errors.push(format!("{}: db: {}", s.id, e));
+                    continue;
+                }
+                // Confidence updates aren't covered by update_edit_fields; do a focused write.
+                let _ = sqlx::query("UPDATE meeting_screenshots SET confidence=? WHERE id=?")
+                    .bind(score.score)
+                    .bind(&s.id)
+                    .execute(pool)
+                    .await;
+                updated += 1;
+            }
+            Err(e) => {
+                errors.push(format!("{}: vision: {}", s.id, e));
+            }
+        }
+    }
+
+    Ok(EnrichmentResult {
+        processed,
+        updated,
+        skipped: processed - updated - errors.len(),
+        errors,
+    })
 }
 
 /// Read an accepted screenshot's PNG from disk and return it as a data URL.

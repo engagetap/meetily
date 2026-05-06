@@ -30,7 +30,7 @@ fn records_2_seconds_to_a_file() {
 
         let recorder = ScreenRecorder::new();
         recorder
-            .start(primary.id, &tmp, 30, 3000)
+            .start(primary.id, &tmp, 30, 3000, false)
             .expect("recorder.start");
         sleep(Duration::from_secs(2));
         let meta = recorder.stop().expect("recorder.stop");

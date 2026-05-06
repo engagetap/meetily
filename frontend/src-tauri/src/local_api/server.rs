@@ -163,6 +163,7 @@ struct RecordStartRequest {
     display_id: u32,
     fps: Option<u32>,
     bitrate_kbps: Option<u32>,
+    capture_mic: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -220,6 +221,7 @@ async fn post_record_start<R: tauri::Runtime>(
             &path,
             body.fps.unwrap_or(30),
             body.bitrate_kbps.unwrap_or(3000),
+            body.capture_mic.unwrap_or(false),
         ) {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")).into_response();
         }

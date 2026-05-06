@@ -59,6 +59,7 @@ impl ScreenRecorder {
         output_path: &Path,
         fps: u32,
         _bitrate_kbps: u32,
+        capture_mic: bool,
     ) -> Result<(), ScreenRecorderError> {
         let mut guard = self
             .active
@@ -99,6 +100,14 @@ impl ScreenRecorder {
                 cfg.set_minimum_frame_interval(cm::Time::new(1, fps as i32));
                 cfg.set_captures_audio(true);
                 cfg.set_excludes_current_process_audio(true);
+                // macOS 15+: optionally route mic audio through the same
+                // stream so SCRecordingOutput muxes it into the mp4
+                // alongside system audio. Requires Microphone permission
+                // — if permission is denied, ScreenCaptureKit produces a
+                // near-empty mp4, so we keep this opt-in.
+                if capture_mic {
+                    cfg.set_capture_mic(true);
+                }
                 cfg.set_shows_cursor(true);
 
                 let windows = ns::Array::new();

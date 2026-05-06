@@ -66,6 +66,7 @@ mod imp {
         display_id: u32,
         fps: Option<u32>,
         bitrate_kbps: Option<u32>,
+        capture_mic: Option<bool>,
         state: State<'_, ScreenRecorderState>,
         app_state: State<'_, AppState>,
     ) -> Result<String, ScreenRecorderError> {
@@ -88,9 +89,13 @@ mod imp {
         .await
         .map_err(|e| ScreenRecorderError::Internal(format!("db: {}", e)))?;
 
-        state
-            .recorder
-            .start(display_id, &path, fps.unwrap_or(30), bitrate_kbps.unwrap_or(3000))?;
+        state.recorder.start(
+            display_id,
+            &path,
+            fps.unwrap_or(30),
+            bitrate_kbps.unwrap_or(3000),
+            capture_mic.unwrap_or(false),
+        )?;
 
         let mut cur = state.active.lock().await;
         *cur = Some(ActiveRecordingInfo {
@@ -215,6 +220,7 @@ mod imp {
         _display_id: u32,
         _fps: Option<u32>,
         _bitrate_kbps: Option<u32>,
+        _capture_mic: Option<bool>,
         _s: State<'_, ScreenRecorderState>,
         _a: State<'_, AppState>,
     ) -> Result<String, ScreenRecorderError> {

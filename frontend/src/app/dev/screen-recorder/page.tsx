@@ -45,6 +45,7 @@ export default function ScreenRecorderDevPage() {
   const [meetingId] = useState<string>("dev-" + Date.now());
   const [bookmarks, setBookmarks] = useState<BookmarkResult[]>([]);
   const [apiConfig, setApiConfig] = useState<ApiConfig | null>(null);
+  const [captureMic, setCaptureMic] = useState(false);
 
   useEffect(() => {
     invoke<Display[]>("screen_list_displays")
@@ -69,6 +70,7 @@ export default function ScreenRecorderDevPage() {
         displayId: selected,
         fps: 30,
         bitrateKbps: 3000,
+        captureMic,
       });
       setRecordingId(id);
       setRecording(true);
@@ -164,7 +166,7 @@ export default function ScreenRecorderDevPage() {
         ))}
       </ul>
 
-      <div style={{ marginTop: 16, display: "flex", gap: 12 }}>
+      <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center" }}>
         {!recording ? (
           <button
             onClick={start}
@@ -185,6 +187,16 @@ export default function ScreenRecorderDevPage() {
         >
           Bookmark now (UI)
         </button>
+        <label style={{ fontSize: 13, marginLeft: 8 }}>
+          <input
+            type="checkbox"
+            checked={captureMic}
+            disabled={recording}
+            onChange={(e) => setCaptureMic(e.target.checked)}
+            style={{ marginRight: 6 }}
+          />
+          Include microphone (needs Mic permission)
+        </label>
       </div>
 
       {recordingId && (
