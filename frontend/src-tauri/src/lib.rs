@@ -51,6 +51,7 @@ pub mod openrouter;
 pub mod local_api;
 pub mod parakeet_engine;
 pub mod screen_recorder;
+pub mod screenshots;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -735,6 +736,14 @@ pub fn run() {
             screen_recorder::commands::bookmark_now,
             local_api::commands::local_api_get_config,
             local_api::commands::local_api_regenerate_token,
+            // Phase 2: screenshot pipeline + review
+            screenshots::commands::screenshots_generate,
+            screenshots::commands::screenshots_list,
+            screenshots::commands::screenshots_preview_frame,
+            screenshots::commands::screenshots_update,
+            screenshots::commands::screenshots_accept,
+            screenshots::commands::screenshots_reject,
+            screenshots::commands::screenshots_read_image,
             openrouter::get_openrouter_models,
             audio::recording_preferences::get_recording_preferences,
             audio::recording_preferences::set_recording_preferences,

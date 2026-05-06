@@ -73,6 +73,22 @@ impl RecordingsRepository {
         .fetch_all(pool)
         .await
     }
+
+    /// Returns the most recently-finalized recording for a meeting. Used by
+    /// the screenshot pipeline to locate the video file to extract from.
+    pub async fn latest_finalized_for_meeting(
+        pool: &SqlitePool,
+        meeting_id: &str,
+    ) -> Result<Option<MeetingRecording>, sqlx::Error> {
+        sqlx::query_as::<_, MeetingRecording>(
+            "SELECT * FROM meeting_recordings
+             WHERE meeting_id = ? AND ended_at IS NOT NULL
+             ORDER BY ended_at DESC LIMIT 1",
+        )
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await
+    }
 }
 
 #[cfg(test)]

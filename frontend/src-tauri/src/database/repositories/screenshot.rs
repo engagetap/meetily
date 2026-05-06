@@ -86,6 +86,75 @@ impl ScreenshotsRepository {
         .fetch_all(pool)
         .await
     }
+
+    pub async fn get(
+        pool: &SqlitePool,
+        id: &str,
+    ) -> Result<Option<MeetingScreenshot>, sqlx::Error> {
+        sqlx::query_as::<_, MeetingScreenshot>("SELECT * FROM meeting_screenshots WHERE id=?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+    }
+
+    /// Updates the editable fields of a screenshot (timestamp, crop, caption).
+    /// Pass `None` to clear the crop. Used by the review UI's edit flow.
+    pub async fn update_edit_fields(
+        pool: &SqlitePool,
+        id: &str,
+        timestamp_ms: i64,
+        crop: Option<(i64, i64, i64, i64)>,
+        caption: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        let (cx, cy, cw, ch) = crop
+            .map(|c| (Some(c.0), Some(c.1), Some(c.2), Some(c.3)))
+            .unwrap_or((None, None, None, None));
+        let now = Utc::now().timestamp_millis();
+        sqlx::query(
+            "UPDATE meeting_screenshots
+             SET timestamp_ms=?, crop_x=?, crop_y=?, crop_w=?, crop_h=?, caption=?, updated_at=?
+             WHERE id=?",
+        )
+        .bind(timestamp_ms)
+        .bind(cx)
+        .bind(cy)
+        .bind(cw)
+        .bind(ch)
+        .bind(caption)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Marks the screenshot accepted, persisting the image_path on disk.
+    pub async fn set_accepted(
+        pool: &SqlitePool,
+        id: &str,
+        image_path: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        let now = Utc::now().timestamp_millis();
+        sqlx::query(
+            "UPDATE meeting_screenshots SET accepted=1, image_path=?, updated_at=? WHERE id=?",
+        )
+        .bind(image_path)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_rejected(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+        let now = Utc::now().timestamp_millis();
+        sqlx::query("UPDATE meeting_screenshots SET accepted=0, updated_at=? WHERE id=?")
+            .bind(now)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

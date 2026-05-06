@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { invoke } from "@tauri-apps/api/core";
 
 type Display = {
@@ -220,6 +221,20 @@ export default function ScreenRecorderDevPage() {
         >
 {JSON.stringify(meta, null, 2)}
         </pre>
+      )}
+
+      {(meta || bookmarks.length > 0) && (
+        <p style={{ marginTop: 16 }}>
+          <Link
+            href={`/dev/review/${encodeURIComponent(meetingId)}`}
+            style={{ marginRight: 12 }}
+          >
+            → Review screenshots
+          </Link>
+          <Link href={`/dev/highlights/${encodeURIComponent(meetingId)}`}>
+            → Highlights gallery
+          </Link>
+        </p>
       )}
 
       <hr style={{ margin: "32px 0" }} />
