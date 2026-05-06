@@ -7,6 +7,7 @@ import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { Toaster, toast } from 'sonner'
+import { DisplayPickerOverlay } from '@/components/DisplayPicker/DisplayPickerOverlay'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
@@ -277,6 +278,7 @@ export default function RootLayout({
         </AnalyticsProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
+        <DisplayPickerOverlay />
       </body>
     </html>
   )

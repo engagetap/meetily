@@ -56,17 +56,33 @@ export async function maybeStartScreenRecording(): Promise<void> {
       return;
     }
 
-    // Honour the user's default-display preference if set; otherwise the
-    // OS-reported primary display.
-    const preferredId = parseInt(localStorage.getItem('meetily.defaultDisplayId') ?? '', 10);
-    const chosen =
-      (Number.isFinite(preferredId) && displays.find((d) => d.id === preferredId)) ||
-      displays.find((d) => d.is_primary) ||
-      displays[0];
+    // Ask the user which display to record. The DisplayPickerOverlay
+    // (mounted in app/layout) registers a window-global resolver. The
+    // overlay short-circuits silently when there's only one display, when
+    // the user opted out via "Ask before every recording", or when no
+    // saved default exists. A `null` return means the user cancelled —
+    // skip screen recording entirely.
+    let chosenId: number | null = null;
+    if (window.__meetilyDisplayPicker) {
+      chosenId = await window.__meetilyDisplayPicker.pick();
+    } else {
+      // Fallback for environments without the overlay (e.g. local API).
+      const preferredId = parseInt(localStorage.getItem('meetily.defaultDisplayId') ?? '', 10);
+      const chosen =
+        (Number.isFinite(preferredId) && displays.find((d) => d.id === preferredId)) ||
+        displays.find((d) => d.is_primary) ||
+        displays[0];
+      chosenId = chosen?.id ?? null;
+    }
+
+    if (chosenId == null) {
+      console.log('Display picker cancelled — skipping screen recording');
+      return;
+    }
 
     await invoke('screen_start_recording', {
       meetingId: `screen-${crypto.randomUUID()}`,
-      displayId: chosen.id,
+      displayId: chosenId,
       fps: 30,
       bitrateKbps: 3000,
       captureMic,
