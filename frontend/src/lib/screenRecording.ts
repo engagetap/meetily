@@ -86,6 +86,58 @@ export async function maybeStartScreenRecording(): Promise<void> {
 }
 
 /**
+ * Auto-captions pending screenshots in the background after a recording stops.
+ *
+ * Two paths, run in this order:
+ *   1. Vision (Claude) — highest quality, also receives a transcript window
+ *      around each screenshot's timestamp so the caption reflects both
+ *      what's visible and what was being said. Skipped if no Anthropic
+ *      key is configured.
+ *   2. Transcript-only fallback — for any screenshot whose caption is
+ *      still empty, picks the closest transcript segment and trims it
+ *      to a short caption. Local, no API needed. Waits up to 60s for
+ *      transcripts to finish processing.
+ */
+async function autoCaptionInBackground(meetingId: string): Promise<void> {
+  // 1. Vision (best effort — runs even without transcripts).
+  try {
+    const result = await invoke<{
+      processed: number;
+      updated: number;
+      errors: string[];
+    }>('screenshots_enrich_with_vision', { meetingId });
+    if (result.updated > 0) {
+      console.log(`Auto-captioned ${result.updated} screenshot(s) with Claude vision`);
+    }
+  } catch (e) {
+    console.warn('Auto vision-caption skipped:', e);
+  }
+
+  // 2. Transcript-only fallback. Transcription is asynchronous; poll a
+  // few times so we catch newly-finalized segments without blocking.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    try {
+      const r = await invoke<{
+        processed: number;
+        captioned: number;
+      }>('screenshots_caption_from_transcript', { meetingId });
+      if (r.captioned > 0) {
+        console.log(`Auto-captioned ${r.captioned} screenshot(s) from transcript`);
+        break;
+      }
+      if (r.processed === 0) {
+        // No remaining pending screenshots — we're done.
+        break;
+      }
+    } catch (e) {
+      console.warn('Transcript caption attempt failed:', e);
+      break;
+    }
+  }
+}
+
+/**
  * Tauri command errors come back as objects shaped like
  * `{ type: 'PermissionDenied' }` or `{ type: 'Internal', message: '...' }`,
  * which `String()` flattens into `[object Object]`. This formats them
@@ -189,13 +241,20 @@ export async function maybeStopScreenRecording(): Promise<void> {
         console.log(`Auto-generated ${count} screenshot candidate(s)`);
         if (count > 0) {
           toast.success(`Generated ${count} screenshot candidate${count === 1 ? '' : 's'}`, {
-            description: 'Open the meeting to review them.',
+            description: 'Captioning in the background — open the meeting to review.',
             duration: 5000,
           });
         }
       } catch (genErr) {
         console.warn('Auto-generate failed:', genErr);
       }
+
+      // Auto-caption: kick this off in the background so the user lands on
+      // the meeting-details page with captions already populated. Vision
+      // (Claude) gives the highest quality but needs a key + transcript
+      // takes a beat to finish, so we fire-and-forget. The Screenshots
+      // panel will pick the captions up on its next refresh.
+      void autoCaptionInBackground(meta.meeting_id);
     }
   } catch (err) {
     console.warn('Screen stop skipped:', err);

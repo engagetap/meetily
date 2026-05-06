@@ -232,6 +232,211 @@ pub async fn screenshots_reject(
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct CaptionFromTranscriptResult {
+    pub processed: usize,
+    pub captioned: usize,
+    pub skipped_no_transcript: usize,
+}
+
+/// Auto-caption pending (no caption yet) screenshots from the transcript:
+/// for each screenshot, look up the transcript segment whose
+/// `audio_start_time` brackets the screenshot's `timestamp_ms / 1000`
+/// (or the nearest segment by midpoint), trim it to ~12 words, and store
+/// it as the caption.
+///
+/// Audio meetings and screen recordings have independent ids; this resolves
+/// them by start-time proximity (audio's `meetings.created_at` vs. the
+/// screen recording's `started_at`) within ±5 minutes.
+#[tauri::command]
+pub async fn screenshots_caption_from_transcript(
+    meeting_id: String,
+    app_state: State<'_, AppState>,
+) -> Result<CaptionFromTranscriptResult, ScreenshotCommandError> {
+    let pool = app_state.db_manager.pool();
+
+    // 1. Find the screen recording row to get its started_at wall-clock.
+    let recordings = crate::database::repositories::RecordingsRepository::list_for_meeting(
+        pool,
+        &meeting_id,
+    )
+    .await
+    .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+    let started_at = match recordings.first() {
+        Some(r) => r.started_at,
+        None => {
+            return Err(ScreenshotCommandError::NoRecording(meeting_id.clone()));
+        }
+    };
+
+    // 2. Find the audio meeting whose created_at is closest. Look at all
+    // meetings; pick the one within ±5 min of the screen-recording start.
+    let audio_meeting_id = resolve_audio_meeting_id(pool, started_at)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+    let Some(audio_meeting_id) = audio_meeting_id else {
+        return Ok(CaptionFromTranscriptResult {
+            processed: 0,
+            captioned: 0,
+            skipped_no_transcript: 0,
+        });
+    };
+
+    // 3. Pull all transcript segments for that meeting, sorted by audio_start_time.
+    let segments: Vec<(f64, f64, String)> = sqlx::query_as(
+        "SELECT audio_start_time, audio_end_time, transcript
+         FROM transcripts
+         WHERE meeting_id = ? AND audio_start_time IS NOT NULL
+         ORDER BY audio_start_time ASC",
+    )
+    .bind(&audio_meeting_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+
+    if segments.is_empty() {
+        return Ok(CaptionFromTranscriptResult {
+            processed: 0,
+            captioned: 0,
+            skipped_no_transcript: 0,
+        });
+    }
+
+    // 4. For each pending screenshot without a caption, pick the segment
+    // covering its timestamp (or the nearest by midpoint) and trim to
+    // a short caption.
+    let shots = ScreenshotsRepository::list_for_meeting(pool, &meeting_id)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+
+    let mut processed = 0;
+    let mut captioned = 0;
+    let mut skipped = 0;
+    for s in shots {
+        if s.caption.as_deref().unwrap_or("").trim().len() > 0 {
+            continue;
+        }
+        processed += 1;
+        let target_sec = s.timestamp_ms as f64 / 1000.0;
+        let best = segments
+            .iter()
+            .min_by(|a, b| {
+                let am = (a.0 + a.1) / 2.0;
+                let bm = (b.0 + b.1) / 2.0;
+                (am - target_sec)
+                    .abs()
+                    .partial_cmp(&(bm - target_sec).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        match best {
+            None => {
+                skipped += 1;
+            }
+            Some((_, _, text)) => {
+                let cap = trim_to_caption(text, 12);
+                if cap.is_empty() {
+                    skipped += 1;
+                    continue;
+                }
+                let crop_tuple = match (s.crop_x, s.crop_y, s.crop_w, s.crop_h) {
+                    (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
+                    _ => None,
+                };
+                ScreenshotsRepository::update_edit_fields(
+                    pool,
+                    &s.id,
+                    s.timestamp_ms,
+                    crop_tuple,
+                    Some(&cap),
+                )
+                .await
+                .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
+                captioned += 1;
+            }
+        }
+    }
+
+    Ok(CaptionFromTranscriptResult {
+        processed,
+        captioned,
+        skipped_no_transcript: skipped,
+    })
+}
+
+/// Finds the audio meeting whose `created_at` is closest to the given
+/// wall-clock millisecond timestamp (typically a screen recording's
+/// `started_at`). Returns None if no meeting is within ±5 minutes.
+async fn resolve_audio_meeting_id(
+    pool: &sqlx::SqlitePool,
+    started_at_ms: i64,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT id FROM meetings
+         WHERE ABS(strftime('%s', created_at) * 1000 - ?) <= ?
+         ORDER BY ABS(strftime('%s', created_at) * 1000 - ?) ASC
+         LIMIT 1",
+    )
+    .bind(started_at_ms)
+    .bind(5_i64 * 60_i64 * 1000)
+    .bind(started_at_ms)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Concatenates transcript segments whose `audio_start_time` (seconds) lies
+/// within `window_seconds` of the given screenshot timestamp (ms). Returns
+/// `None` if no segments overlap the window.
+fn build_transcript_window(
+    segments: &[(f64, f64, String)],
+    screenshot_ms: i64,
+    window_seconds: f64,
+) -> Option<String> {
+    if segments.is_empty() {
+        return None;
+    }
+    let target = screenshot_ms as f64 / 1000.0;
+    let lo = target - window_seconds;
+    let hi = target + window_seconds;
+    let mut texts: Vec<&str> = Vec::new();
+    for (start, end, text) in segments {
+        let mid = (start + end) / 2.0;
+        if mid >= lo && mid <= hi {
+            texts.push(text.as_str());
+        }
+    }
+    if texts.is_empty() {
+        return None;
+    }
+    let joined = texts.join(" ");
+    let trimmed = joined.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Trims a transcript segment down to a short caption. Strips leading/
+/// trailing whitespace, keeps at most `max_words` words, and adds a period
+/// if no terminal punctuation is present.
+fn trim_to_caption(text: &str, max_words: usize) -> String {
+    let cleaned = text.split_whitespace().collect::<Vec<_>>();
+    if cleaned.is_empty() {
+        return String::new();
+    }
+    let mut out = if cleaned.len() <= max_words {
+        cleaned.join(" ")
+    } else {
+        let mut joined = cleaned[..max_words].join(" ");
+        joined.push('…');
+        joined
+    };
+    if !out.ends_with('.') && !out.ends_with('?') && !out.ends_with('!') && !out.ends_with('…') {
+        out.push('.');
+    }
+    out
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct EnrichmentResult {
     pub processed: usize,
     pub updated: usize,
@@ -273,6 +478,28 @@ pub async fn screenshots_enrich_with_vision(
         .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?
         .ok_or_else(|| ScreenshotCommandError::NoRecording(meeting_id.clone()))?;
 
+    // Look up the matching audio meeting (independent ids; proximity match
+    // by created_at within ±5 minutes) and pull its transcript segments.
+    // We pass a small window of transcript around each screenshot's
+    // timestamp to Claude so it can ground the caption in what was actually
+    // being discussed at that moment, not just what the frame shows.
+    let segments: Vec<(f64, f64, String)> = match resolve_audio_meeting_id(pool, rec.started_at)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?
+    {
+        Some(audio_meeting_id) => sqlx::query_as(
+            "SELECT audio_start_time, audio_end_time, transcript
+             FROM transcripts
+             WHERE meeting_id = ? AND audio_start_time IS NOT NULL
+             ORDER BY audio_start_time ASC",
+        )
+        .bind(&audio_meeting_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?,
+        None => Vec::new(),
+    };
+
     let shots = ScreenshotsRepository::list_for_meeting(pool, &meeting_id)
         .await
         .map_err(|e| ScreenshotCommandError::Db(e.to_string()))?;
@@ -309,7 +536,8 @@ pub async fn screenshots_enrich_with_vision(
             }
         };
 
-        match score_with_anthropic(&api_key, &bytes, None).await {
+        let context = build_transcript_window(&segments, s.timestamp_ms, 15.0);
+        match score_with_anthropic(&api_key, &bytes, context.as_deref()).await {
             Ok(score) => {
                 // Persist by re-using update_edit_fields (timestamp/crop unchanged, caption replaced)
                 let crop_tuple = match (s.crop_x, s.crop_y, s.crop_w, s.crop_h) {

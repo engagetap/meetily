@@ -172,6 +172,21 @@ export function ScreenshotsPanel({
     }
   }
 
+  async function captionFromTranscript() {
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke("screenshots_caption_from_transcript", {
+        meetingId: activeMeetingId,
+      });
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const accepted = shots.filter((s) => s.accepted === 1);
   const pending = shots.filter((s) => s.accepted === 0);
 
@@ -196,9 +211,17 @@ export function ScreenshotsPanel({
             onClick={enrich}
             disabled={busy || loading || pending.length === 0}
             className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:border-gray-400 disabled:opacity-50"
-            title="Use the configured Anthropic API key to caption pending candidates"
+            title="Use the configured Anthropic API key to caption pending candidates (vision + transcript context)"
           >
-            Enrich with Claude vision
+            Caption with Claude
+          </button>
+          <button
+            onClick={captionFromTranscript}
+            disabled={busy || loading || pending.length === 0}
+            className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:border-gray-400 disabled:opacity-50"
+            title="Caption from the transcript text near each screenshot (local, no API key)"
+          >
+            Caption from transcript
           </button>
           <button
             onClick={load}
