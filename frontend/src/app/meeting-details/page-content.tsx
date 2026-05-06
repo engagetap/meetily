@@ -190,6 +190,9 @@ export default function PageContent({
           onLoadMore={onLoadMore}
           // Retranscription props
           meetingId={meeting.id}
+          meetingCreatedAtMs={
+            meeting.created_at ? new Date(meeting.created_at).getTime() : undefined
+          }
           meetingFolderPath={meeting.folder_path}
           onRefetchTranscripts={onRefetchTranscripts}
         />

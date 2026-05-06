@@ -15,7 +15,10 @@ type ScreenshotRow = {
   image_path: string | null;
 };
 
-function useInlineScreenshots(meetingId?: string): InlineScreenshotData[] {
+function useInlineScreenshots(
+  meetingId?: string,
+  meetingCreatedAtMs?: number,
+): InlineScreenshotData[] {
   const [screenshots, setScreenshots] = useState<InlineScreenshotData[]>([]);
 
   useEffect(() => {
@@ -23,7 +26,23 @@ function useInlineScreenshots(meetingId?: string): InlineScreenshotData[] {
     let cancelled = false;
     (async () => {
       try {
-        const list = await invoke<ScreenshotRow[]>('screenshots_list', { meetingId });
+        // Audio meetings and screen recordings have independent ids. Try the
+        // direct match first (in case ids were unified at some point), then
+        // fall back to timestamp-proximity resolution against the audio
+        // meeting's created_at — same approach as ScreenshotsPanel.
+        let list = await invoke<ScreenshotRow[]>('screenshots_list', { meetingId });
+        if (list.length === 0 && meetingCreatedAtMs != null) {
+          const screenId = await invoke<string | null>(
+            'screenshots_resolve_recording_meeting_id',
+            { nearMs: meetingCreatedAtMs, toleranceMs: 5 * 60 * 1000 },
+          );
+          if (screenId) {
+            list = await invoke<ScreenshotRow[]>('screenshots_list', {
+              meetingId: screenId,
+            });
+          }
+        }
+
         const accepted = list.filter((s) => s.accepted === 1 && s.image_path);
         const out: InlineScreenshotData[] = [];
         for (const s of accepted) {
@@ -47,7 +66,7 @@ function useInlineScreenshots(meetingId?: string): InlineScreenshotData[] {
     return () => {
       cancelled = true;
     };
-  }, [meetingId]);
+  }, [meetingId, meetingCreatedAtMs]);
 
   return screenshots;
 }
@@ -72,6 +91,7 @@ interface TranscriptPanelProps {
 
   // Retranscription props
   meetingId?: string;
+  meetingCreatedAtMs?: number;
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
 }
@@ -92,11 +112,12 @@ export function TranscriptPanel({
   loadedCount,
   onLoadMore,
   meetingId,
+  meetingCreatedAtMs,
   meetingFolderPath,
   onRefetchTranscripts,
 }: TranscriptPanelProps) {
   // Phase 3: fetch accepted screenshots for inline embedding.
-  const inlineScreenshots = useInlineScreenshots(meetingId);
+  const inlineScreenshots = useInlineScreenshots(meetingId, meetingCreatedAtMs);
 
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
