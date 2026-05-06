@@ -61,7 +61,12 @@ mod imp {
 
     #[tauri::command]
     pub async fn screen_list_displays() -> Result<Vec<DisplayInfo>, ScreenRecorderError> {
-        crate::screen_recorder::recorder::list_displays()
+        let displays = crate::screen_recorder::recorder::list_displays();
+        match &displays {
+            Ok(d) => log::info!("screen_list_displays: returned {} display(s)", d.len()),
+            Err(e) => log::warn!("screen_list_displays: error: {:?}", e),
+        }
+        displays
     }
 
     // Apple's documented APIs for screen-capture permission. They live in
@@ -92,6 +97,7 @@ mod imp {
     /// Mirrors how the audio path uses `trigger_microphone_permission`.
     #[tauri::command]
     pub async fn screen_request_permission() -> Result<bool, ScreenRecorderError> {
+        log::info!("screen_request_permission: invoking CGRequestScreenCaptureAccess");
         // The Apple API must run on the main thread. tauri::async_runtime
         // dispatches to a worker by default, so we hop back via
         // tauri::async_runtime::spawn_blocking + a main-thread handoff.
@@ -100,6 +106,7 @@ mod imp {
         })
         .await
         .map_err(|e| ScreenRecorderError::Internal(format!("join: {e}")))?;
+        log::info!("screen_request_permission: granted={}", granted);
         Ok(granted)
     }
 
@@ -210,6 +217,10 @@ mod imp {
         state: State<'_, ScreenRecorderState>,
         app_state: State<'_, AppState>,
     ) -> Result<String, ScreenRecorderError> {
+        log::info!(
+            "screen_start_recording: meeting_id={} display_id={} fps={:?} mic={:?}",
+            meeting_id, display_id, fps, capture_mic
+        );
         let dir = recordings_dir(&app).await?;
         std::fs::create_dir_all(&dir).map_err(|e| ScreenRecorderError::Io(e.to_string()))?;
         let filename = format!(
@@ -229,13 +240,19 @@ mod imp {
         .await
         .map_err(|e| ScreenRecorderError::Internal(format!("db: {}", e)))?;
 
-        state.recorder.start(
+        match state.recorder.start(
             display_id,
             &path,
             fps.unwrap_or(30),
             bitrate_kbps.unwrap_or(3000),
             capture_mic.unwrap_or(false),
-        )?;
+        ) {
+            Ok(()) => log::info!("screen_start_recording: started → {}", path.display()),
+            Err(e) => {
+                log::error!("screen_start_recording: failed to start: {:?}", e);
+                return Err(e);
+            }
+        }
 
         let mut cur = state.active.lock().await;
         *cur = Some(ActiveRecordingInfo {
