@@ -8,6 +8,7 @@ import MainContent from '@/components/MainContent'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { Toaster, toast } from 'sonner'
 import { DisplayPickerOverlay } from '@/components/DisplayPicker/DisplayPickerOverlay'
+import { ChunkErrorReloader } from '@/components/ChunkErrorReloader'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
@@ -279,6 +280,7 @@ export default function RootLayout({
 
         <Toaster position="bottom-center" richColors closeButton />
         <DisplayPickerOverlay />
+        <ChunkErrorReloader />
       </body>
     </html>
   )
